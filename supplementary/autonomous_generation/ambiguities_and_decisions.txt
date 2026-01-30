@@ -1,0 +1,236 @@
+HEPTAPOD S1 workflow: ambiguities and implementation decisions
+=============================================================
+
+1. Overview
+-----------
+
+This document collects the main ambiguities and under-specifications
+encountered while implementing the HEPTAPOD scalar-leptoquark (S1)
+workflow, together with the concrete decisions made in this
+implementation. It is intended as a technical companion to the
+heptapod_short.pdf note and the MC4BSM-style tutorials, so that the
+end-to-end chain (MG5_aMC + Pythia8 + FastJet/pyjet + analysis +
+plotting) can be reproduced or modified in a controlled way.
+
+
+2. Environment and tooling decisions
+------------------------------------
+
+- MadGraph5_aMC@NLO environment
+  - Issue: The HEPTAPOD note does not fix a particular MG5_aMC
+    version, installation path, or configuration.
+  - Decision: Use the pre-existing installation at /opt/MG5_aMC,
+    version 3.7.0, with configuration from
+    /opt/MG5_aMC/input/mg5_configuration.txt as prepared by the
+    host environment.
+  - Rationale: Reusing the validated system-wide MG5_aMC install
+    avoids duplicating tool setup and matches the environment
+    described in environment_notes.txt.
+
+- Pythia8 and MG5_aMC_PY8_interface
+  - Issue: The paper specifies Pythia8 showering qualitatively but
+    not the exact version, tune, or interface wiring.
+  - Decision: Use Pythia 8.316 from
+    /opt/MG5_aMC/HEPTools/pythia8 together with the
+    MG5aMC_PY8_interface at
+    /opt/MG5_aMC/HEPTools/MG5aMC_PY8_interface, as configured in
+    mg5_configuration.txt. Shower settings are taken from the
+    default pythia8_cmd.dat and related cards produced by MG5_aMC.
+  - Rationale: This follows the standard MG5_aMC + Pythia8 setup
+    recommended by the MC4BSM tutorials and avoids introducing
+    custom Pythia steering beyond what HEPTAPOD requires.
+
+- FastJet and Python analysis stack
+  - Issue: The HEPTAPOD note requires jet clustering but not a
+    specific FastJet installation, Python environment, or jet
+    wrapper.
+  - Decision: Use FastJet 3.4.2 from
+    /opt/MG5_aMC/HEPTools/fastjet for MG5_aMC-internal jet uses,
+    and pyjet 1.9.0 in the Python environment /opt/envs/MAD for
+    analysis-level clustering. The broken Python fastjet binding in
+    /opt/envs/MAD is not used.
+  - Rationale: This combination provides a stable C++ FastJet for
+    MG5_aMC and a lightweight Python interface (pyjet) for custom
+    jet reconstruction in heptapod_analysis.py.
+
+- Python environment and libraries
+  - Issue: The analysis stack (numpy, matplotlib, pyhepmc, pyjet,
+    vector, awkward, etc.) is not specified in the note.
+  - Decision: Use the virtual environment /opt/envs/MAD with
+    Python 3.11.2 and the package versions documented in
+    environment_notes.txt. All analysis scripts are run after
+    sourcing /workspace/heptapod/env_setup.sh, which activates this
+    environment.
+  - Rationale: This environment is preconfigured for MG5_aMC-style
+    analyses and provides all required libraries without further
+    dependency management.
+
+- MG5_aMC 3.7.0 CLI behaviour
+  - Issue: The HEPTAPOD MG5 script uses the syntax
+    "launch ... --shower=Pythia8", which is not recognised by
+    MG5_aMC 3.7.0 in this environment.
+  - Decision: For the initial event production (already present in
+    /workspace/heptapod/mg_run/s1_pair/Events), the workflow relied
+    on a working MG5_aMC+Pythia8 setup. During the final validation
+    run, mg5_aMC aborted with "no such option: --shower"; the
+    driver script then failed when looking for freshly-regenerated
+    LHE/HepMC files but existing files remain usable.
+  - Rationale: This is a version-specific interface change in
+    MG5_aMC; adapting the MG5 command sequence (e.g. to
+    "launch ..." followed by interactive "set shower=Pythia8") is
+    a straightforward future improvement, but for this HEPTAPOD
+    implementation we keep the physics configuration fixed and
+    document the current limitation.
+
+
+3. Physics and generator ambiguities
+------------------------------------
+
+- Item 1: Collider energy and beam configuration
+  - Issue: The HEPTAPOD excerpt specifies only a pp initial state
+    and does not fix √s or beam energies.
+  - Decision: Use proton–proton collisions at √s = 8 TeV with
+    ebeam1 = ebeam2 = 4000 GeV in the MG5 run card, matching the
+    MC4BSM-2012 tutorial setup.
+  - Rationale: 8 TeV is historically standard for MC4BSM-style
+    examples and is explicitly used in the referenced tutorials;
+    this choice makes the HEPTAPOD S1 example directly comparable
+    to those while staying within the freedom allowed by the note.
+
+- Item 2: UFO model choice and S1 implementation
+  - Issue: The note does not name a specific UFO model or public
+    repository for S1, only that a FeynRules-derived model should
+    be used.
+  - Decision: Use the built-in MG5_aMC UFO model
+    LQnlo_5FNS_v5_UFO and identify S1 with the scalar field LQ1d
+    (and its antiparticle LQ1d~) in that model.
+  - Rationale: LQnlo_5FNS_v5_UFO is a standard leptoquark UFO
+    shipped with MG5_aMC, and LQ1d has the correct quantum numbers
+    for an S1-like state. This avoids custom FeynRules work while
+    remaining faithful to the simplified S1 picture.
+
+- Item 3: Flavour structure, Yukawa couplings, and widths
+  - Issue: The HEPTAPOD text states that the Yukawa matrix y_ij is
+    diagonal but gives no numerical entries and no explicit S1
+    widths.
+  - Decision: Set the real right-handed coupling LQY1RR(1,1) = 0.3
+    and all other real entries of LQY1RR and LQY1LL to 0.0 in the
+    param_card. Keep the default narrow on-shell widths from the
+    UFO (O(10 GeV) for the masses considered).
+  - Rationale: This realises a simple single-flavour coupling
+    dominating e_R–u_R transitions and yields Γ_S1/m_S1 ≪ 1,
+    consistent with a narrow-width approximation. HEPTAPOD leaves
+    these parameters free, so this is a reasonable benchmark.
+
+- Item 4: Perturbative order, PDFs, and run-card settings
+  - Issue: The note does not specify LO vs NLO, choice of PDF set,
+    scale definitions, generator-level cuts, or number of events.
+  - Decision: Generate LO events with MG5_aMC using
+    pdlabel = lhapdf and lhaid = 315200 (NNPDF31_lo_as_0130), with
+    nevents = 20000 per mass point and otherwise standard MG5 run
+    and shower cards (no ME–PS matching/merging).
+  - Rationale: LO + Pythia8 is typical for tutorial-level workflows
+    and closely mirrors the MC4BSM examples. The chosen NNPDF LO
+    set is modern and widely used; 20000 events per mass point
+    provide adequate statistics for the shape-based m_LQ^min
+    comparison.
+
+- Item 5: Background processes
+  - Issue: The HEPTAPOD short note lists plausible SM backgrounds
+    (DY+jets, t t̄, dibosons + jets) but does not define generation
+    commands or analysis cuts for them.
+  - Decision: For this implementation, only the S1 signal samples
+    are generated and analysed; SM backgrounds are omitted.
+  - Rationale: The focus of the HEPTAPOD S1 workflow is to
+    illustrate the signal chain and resonance reconstruction. Adding
+    backgrounds would require additional design choices (cross
+    sections, filters, control regions) that are beyond the current
+    scope.
+
+
+4. Reconstruction and analysis ambiguities
+-----------------------------------------
+
+- Item 6: Final-state definition and invisible particles
+  - Issue: The note does not state which HepMC status codes to use
+    for "stable" particles nor how to treat neutrinos.
+  - Decision: Use HepMC status == 1 as stable final-state particles
+    and remove neutrinos (|pid| = 12, 14, 16) entirely from both
+    jets and leptons.
+  - Rationale: status == 1 is the standard convention for
+    final-state particles in HepMC2/Pythia8 outputs. Excluding
+    neutrinos yields visible-only jets and aligns with typical LHC
+    reconstruction where MET is handled separately (not needed
+    here).
+
+- Item 7: Jet algorithm and kinematic acceptance
+  - Issue: The jet algorithm (R, pT threshold, |η| range) is not
+    fixed by HEPTAPOD.
+  - Decision: Cluster jets from all non-electron, non-neutrino
+    stable particles using anti-kT (pyjet.cluster, p = -1) with
+    radius R = 0.4, and select jets with pT > 50 GeV and |η| < 5.0.
+  - Rationale: anti-kT, R = 0.4 with O(50 GeV) thresholds and wide
+    |η| coverage is standard in MC4BSM-style examples and
+    contemporary LHC analyses. This choice balances capturing the
+    S1 decay jets and suppressing soft radiation.
+
+- Item 8: Electron definition and multiplicity requirements
+  - Issue: No explicit lepton pT/η cuts or multiplicity criteria are
+    given in the note.
+  - Decision: Reconstruct electrons as stable particles with
+    |pid| = 11 and require pT > 50 GeV and |η| < 2.5. Events must
+    contain exactly two such electrons.
+  - Rationale: High-pT, central electrons mimic typical LHC
+    leptoquark selections and ensure a clean 2ℓ + 2j topology for
+    m_LQ^min. The "exactly two" requirement simplifies the pairing
+    logic and matches the signal-only nature of this implementation.
+
+- Item 9: Jet multiplicity and use of leading jets
+  - Issue: The HEPTAPOD example mentions a 2ℓ + 2j topology but does
+    not specify how to treat additional jets.
+  - Decision: Require at least two selected jets and use only the
+    two leading jets (by pT) in the resonance reconstruction.
+  - Rationale: This mirrors common leptoquark analyses where the two
+    hardest jets are assumed to originate from the S1 decays; extra
+    jets from ISR/FSR are ignored in the pairing step to keep the
+    reconstruction simple and robust.
+
+- Item 10: m_LQ^min pairing algorithm
+  - Issue: Several pairing choices are possible when combining two
+    leptons with two jets; the note does not explicitly prescribe
+    the algorithm.
+  - Decision: Form two pairings, (l1 + j1, l2 + j2) and (l1 + j2,
+    l2 + j1), compute their invariant masses (m1, m2) for each
+    pairing, select the pairing that minimises |m1 − m2|, and define
+    m_LQ^min as min(m1, m2) of the chosen pairing.
+  - Rationale: Minimising |m1 − m2| is a standard heuristic in
+    pair-produced resonance reconstruction and approximates the
+    correct assignment in most events, while m_LQ^min captures the
+    lower of the two reconstructed masses as in the HEPTAPOD
+    description.
+
+- Item 11: Histogram binning and normalisation
+  - Issue: The m_LQ^min histogram range, bin width, and normalisation
+    are not specified; the note does not fix a reference luminosity.
+  - Decision: Use a common binning for all mass points with edges
+    from 0 to 2500 GeV in 50 GeV steps (50 bins) and store both raw
+    counts and unit-area normalised histograms (counts divided by
+    the total number of entries per mass point).
+  - Rationale: 50 GeV bins over 0–2500 GeV cover the full relevant
+    range for m_S1 ∈ {1.0, 1.5, 2.0 TeV} and yield smooth yet
+    informative shapes. Unit-area normalisation allows direct shape
+    comparison independently of cross-section normalisation or
+    luminosity assumptions.
+
+- Item 12: Hadron-level vs detector-level analysis
+  - Issue: The HEPTAPOD workflow stops at Pythia + FastJet and does
+    not include a detector simulation or object-level efficiencies.
+  - Decision: Perform the analysis at hadron level, using HepMC
+    events from Pythia8 and jets built from stable particles, with
+    no detector smearing, trigger emulation, or efficiency
+    corrections.
+  - Rationale: This is consistent with the scope of the HEPTAPOD
+    short example and with MC4BSM’s emphasis on particle-level
+    workflows. Detector effects can be layered on in future studies
+    but are not required to illustrate the S1 resonance
+    reconstruction.
