@@ -1,0 +1,24 @@
+set auto_update 0
+set run_mode 2
+
+import model /opt/MG5_aMC/models/dim6top_LO_UFO
+
+generate p p > t t~ FCNC=0 DIM6=1
+
+set pythia8_path /opt/MG5_aMC/HEPTools/pythia8
+set mg5amc_py8_interface_path /opt/MG5_aMC/HEPTools/MG5aMC_PY8_interface
+
+output /output/dataset/output/proc_ufo_parton_ttbar -f
+
+launch /output/dataset/output/proc_ufo_parton_ttbar --name=ufo_parton
+
+shower=OFF
+set nevents __NEVENTS__
+set ebeam1 6500
+set ebeam2 6500
+set pdlabel lhapdf
+set lhaid 303400
+set ctG 1.0
+
+done
+quit

@@ -1,0 +1,14 @@
+{
+  "user": "User",
+  "orchestrator": "Orchestrator",
+  "planner": "Planner",
+  "plan_updater": "Plan-Updater",
+  "reviewer": "Reviewer",
+  "summarizer": "Summarizer",
+  "script_operator": "Script-Operator",
+  "researcher": "Researcher",
+  "pdf_reader": "PDF-Reader",
+  "plotter": "Plotter",
+  "madgraph_operator": "MadGraph-Operator",
+  "user_cli_operator": "CLI-Operator"
+}

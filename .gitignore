@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.vscode/
+logs/
+*.log
+.apptainer/
+.npm/
+.local/
+*.db
+*.db-shm
+*.db-wal
+run_dir/
+output/
+*.sif
+*.img
+config.env

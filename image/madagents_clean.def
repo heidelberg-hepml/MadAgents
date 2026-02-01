@@ -1,0 +1,82 @@
+Bootstrap: docker
+From: node:22-bookworm
+
+%files
+    requirements-agent.txt /AgentFitter/requirements-agent.txt
+
+%post
+    set -eux
+
+    ###########################################
+    ## Install system dependencies ############
+    ###########################################
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates bash findutils \
+        python3 python3-pip python3-venv python3-dev python-is-python3 \
+        wget locales build-essential gfortran \
+        libtbb-dev rsync ghostscript imagemagick \
+        nodejs npm cmake \
+        swig autoconf libtool libboost-dev libgmp-dev libmpfr-dev \
+        binutils dpkg-dev git libssl-dev \
+        libx11-dev libxext-dev libxft-dev libxpm-dev libgif-dev
+
+    # w3m fim
+
+    # Cleanup
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+    ###########################################
+    ## Set English locale #####################
+    ###########################################
+
+    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+    locale-gen
+    update-locale LANG=en_US.UTF-8 LC_CTYPE=C.UTF-8
+
+    ###########################################
+    ## Setup dirs #############################
+    ###########################################
+
+    mkdir -p /opt/envs /AgentFitter/envs/
+
+    ###########################################
+    ## Setup venvs ############################
+    ###########################################
+
+    python3 -m venv /AgentFitter/envs/Agent
+    /AgentFitter/envs/Agent/bin/pip install --upgrade pip
+    /AgentFitter/envs/Agent/bin/pip install --no-cache-dir --requirement /AgentFitter/requirements-agent.txt
+
+    python3 -m venv /opt/envs/MAD
+    /opt/envs/MAD/bin/pip install --upgrade pip
+
+%environment
+    # PATH
+    export PATH=/AgentFitter/:/usr/local/bin:/usr/bin:/bin
+
+    # Locale
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+    export LC_CTYPE=C.UTF-8
+
+    # Agent
+    export CLI_CMD="bash"
+
+    # venvs
+    export AgentVenv=/AgentFitter/envs/Agent
+    export MadVenv=/opt/envs/MAD
+    export VIRTUAL_ENV=$MadVenv
+
+    # Editor
+    export EDITOR=nano
+    export VISUAL=$EDITOR
+
+    # PYTHONPATH
+    export PYTHONPATH="/AgentFitter${PYTHONPATH:+:$PYTHONPATH}"
+%labels
+    Base "debian:12 (bookworm)"
+    Purpose "MadAgents Docker"

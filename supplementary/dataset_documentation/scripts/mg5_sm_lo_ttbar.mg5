@@ -1,0 +1,22 @@
+set auto_update 0
+set run_mode 2
+
+import model sm
+define p = g u c d s u~ c~ d~ s~
+define j = p
+
+generate p p > t t~
+
+output /output/dataset/output/proc_sm_lo_ttbar -f
+
+launch /output/dataset/output/proc_sm_lo_ttbar --name=sm_lo
+
+shower=OFF
+set ebeam1 6500
+set ebeam2 6500
+set nevents __NEVENTS__
+set pdlabel lhapdf
+set lhaid 303400
+
+done
+quit
