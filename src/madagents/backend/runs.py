@@ -3,6 +3,7 @@ import shutil
 import sqlite3
 import zipfile
 from datetime import datetime, timezone
+from typing import Optional, Set
 
 from fastapi import HTTPException
 
@@ -143,6 +144,105 @@ def _merge_run_db(
                         row_dict["workdir"] = new_workdir_rel
                     dest.execute(insert_sql, [row_dict[col] for col in col_names])
             dest.commit()
+
+
+def merge_run_metadata(
+    source_db: str,
+    dest_db: str,
+    old_thread_id: str,
+    new_thread_id: str,
+    new_workdir_rel: str,
+    checkpoint_db: Optional[str],
+) -> None:
+    with sqlite3.connect(f"file:{source_db}?mode=ro", uri=True) as src:
+        src.row_factory = sqlite3.Row
+        row = src.execute(
+            "SELECT * FROM runs WHERE thread_id=?",
+            (old_thread_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Missing run metadata in source database")
+        src_cols = [col[1] for col in src.execute('PRAGMA table_info("runs")').fetchall()]
+
+    with sqlite3.connect(dest_db, timeout=5) as dest:
+        dest_cols = [col[1] for col in dest.execute('PRAGMA table_info("runs")').fetchall()]
+        row_dict = {col: row[col] for col in src_cols}
+        row_dict["thread_id"] = new_thread_id
+        row_dict["workdir"] = new_workdir_rel
+        if "checkpoint_db" in dest_cols:
+            row_dict["checkpoint_db"] = checkpoint_db
+        insert_cols = [col for col in dest_cols if col in row_dict]
+        placeholders = ",".join(["?"] * len(insert_cols))
+        col_clause = ",".join([f'"{col}"' for col in insert_cols])
+        insert_sql = f'INSERT INTO "runs" ({col_clause}) VALUES ({placeholders})'
+        dest.execute(insert_sql, [row_dict[col] for col in insert_cols])
+        dest.commit()
+
+
+def merge_run_checkpoints(
+    source_db: str,
+    dest_db: str,
+    old_thread_id: str,
+    new_thread_id: Optional[str] = None,
+    exclude_tables: Optional[Set[str]] = None,
+) -> None:
+    new_thread_id = new_thread_id or old_thread_id
+    exclude = exclude_tables or set()
+    with sqlite3.connect(f"file:{source_db}?mode=ro", uri=True) as src:
+        src.row_factory = sqlite3.Row
+        tables = src.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        with sqlite3.connect(dest_db, timeout=5) as dest:
+            dest.execute("BEGIN")
+            for name, sql in tables:
+                if name in exclude:
+                    continue
+                cols = src.execute(f'PRAGMA table_info("{name}")').fetchall()
+                col_names = [col[1] for col in cols]
+                if "thread_id" not in col_names:
+                    continue
+                exists = dest.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (name,),
+                ).fetchone()
+                if not exists and sql:
+                    dest.execute(sql)
+                dest.execute(
+                    f'DELETE FROM "{name}" WHERE thread_id=?',
+                    (new_thread_id,),
+                )
+                rows = src.execute(
+                    f'SELECT * FROM "{name}" WHERE thread_id=?',
+                    (old_thread_id,),
+                ).fetchall()
+                if not rows:
+                    continue
+                placeholders = ",".join(["?"] * len(col_names))
+                col_clause = ",".join([f'"{col}"' for col in col_names])
+                insert_sql = f'INSERT INTO "{name}" ({col_clause}) VALUES ({placeholders})'
+                for row in rows:
+                    row_dict = {col: row[col] for col in col_names}
+                    row_dict["thread_id"] = new_thread_id
+                    dest.execute(insert_sql, [row_dict[col] for col in col_names])
+            dest.commit()
+
+
+def delete_run_checkpoints(db_path: str, run_id: str) -> None:
+    with sqlite3.connect(db_path, timeout=5) as conn:
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        for (table,) in tables:
+            if table in {"runs", "app_config"}:
+                continue
+            cols = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            if any(col[1] == "thread_id" for col in cols):
+                conn.execute(
+                    f'DELETE FROM "{table}" WHERE thread_id=?',
+                    (run_id,),
+                )
+        conn.commit()
 
 
 def _safe_extract_zip(archive: zipfile.ZipFile, dest_dir: str) -> None:

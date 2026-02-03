@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS runs (
     created_at TEXT NOT NULL,
     last_updated_at TEXT NOT NULL,
     workdir TEXT NOT NULL,
-    name TEXT
+    name TEXT,
+    checkpoint_db TEXT
 )
 """
 
@@ -45,6 +46,12 @@ def ensure_runs_table(db_path: str) -> None:
     """Create the runs table if it does not exist."""
     with sqlite3.connect(db_path, timeout=5) as conn:
         conn.execute(RUNS_TABLE_SQL)
+        cols = {
+            row[1]
+            for row in conn.execute('PRAGMA table_info("runs")').fetchall()
+        }
+        if "checkpoint_db" not in cols:
+            conn.execute('ALTER TABLE "runs" ADD COLUMN checkpoint_db TEXT')
         conn.commit()
 
 
@@ -135,14 +142,20 @@ def update_run_last_updated(db_path: str, run_id: str) -> None:
         conn.commit()
 
 
-def add_run(db_path: str, run_id: str, workdir: str, name: Optional[str] = None) -> None:
+def add_run(
+    db_path: str,
+    run_id: str,
+    workdir: str,
+    name: Optional[str] = None,
+    checkpoint_db: Optional[str] = None,
+) -> None:
     """Insert a new run record."""
     now = _utcnow_iso()
     with sqlite3.connect(db_path, timeout=5) as conn:
         conn.execute(
-            "INSERT INTO runs (thread_id, created_at, last_updated_at, workdir, name) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (run_id, now, now, workdir, name),
+            "INSERT INTO runs (thread_id, created_at, last_updated_at, workdir, name, checkpoint_db) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (run_id, now, now, workdir, name, checkpoint_db),
         )
         conn.commit()
 
@@ -155,6 +168,31 @@ def set_run_name(db_path: str, run_id: str, name: Optional[str]) -> None:
             (name, run_id),
         )
         conn.commit()
+
+
+def set_run_checkpoint_db(db_path: str, run_id: str, checkpoint_db: Optional[str]) -> None:
+    """Set or clear the checkpoint_db for a run."""
+    with sqlite3.connect(db_path, timeout=5) as conn:
+        conn.execute(
+            "UPDATE runs SET checkpoint_db=? WHERE thread_id=?",
+            (checkpoint_db, run_id),
+        )
+        conn.commit()
+
+
+def get_run_checkpoint_db(db_path: str, run_id: str) -> Optional[str]:
+    """Return the checkpoint_db path for a run, or None if missing."""
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            row = conn.execute(
+                "SELECT checkpoint_db FROM runs WHERE thread_id=?",
+                (run_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return row[0]
 
 
 def delete_run_records(db_path: str, run_id: str) -> None:

@@ -29,9 +29,11 @@ from madagents.utils import response_to_text, save_state_atomic
 
 from madagents.backend.constants import (
     BASE_WORKER_AGENTS,
+    CHECKPOINTS_DB_PATH,
     INTERRUPT_USER_MESSAGE,
     KNOWN_AGENT_NAMES,
     REVIEWER_AGENT,
+    RUNS_DB_PATH,
 )
 from madagents.backend.db import (
     add_run,
@@ -39,9 +41,11 @@ from madagents.backend.db import (
     ensure_app_config_table,
     ensure_runs_table,
     get_run_info,
+    get_run_checkpoint_db,
     list_runs,
     load_global_config,
     save_global_config,
+    set_run_checkpoint_db,
     set_run_name,
     update_run_last_updated,
 )
@@ -81,10 +85,12 @@ from madagents.backend.runs import (
     _add_directory_to_zip,
     _create_run_subset_db,
     _iter_file,
-    _merge_run_db,
     _resolve_image_overlay_paths,
     _safe_extract_zip,
     _select_import_run_id,
+    delete_run_checkpoints,
+    merge_run_checkpoints,
+    merge_run_metadata,
     set_sys_link,
 )
 
@@ -106,6 +112,7 @@ def create_app(
     user_handle: InstanceHandle,
     origin_port: int,
     checkpointer,
+    legacy_checkpointer,
 ) -> FastAPI:
     """
     Build the backend FastAPI app with stateful SSE buffers and run management.
@@ -125,16 +132,21 @@ def create_app(
 
     app.state.user_handle = user_handle
     app.state.checkpointer = checkpointer
+    app.state.legacy_checkpointer = legacy_checkpointer
 
-    app.state.checkpoint_db = "/runs/runs.sqlite"
-    ensure_runs_table(app.state.checkpoint_db)
-    ensure_app_config_table(app.state.checkpoint_db)
-    app.state.global_config = load_global_config(app.state.checkpoint_db)
+    app.state.runs_db = RUNS_DB_PATH
+    app.state.checkpoints_db = CHECKPOINTS_DB_PATH
+    app.state.legacy_checkpoints_db = RUNS_DB_PATH
+    ensure_runs_table(app.state.runs_db)
+    ensure_app_config_table(app.state.runs_db)
+    app.state.global_config = load_global_config(app.state.runs_db)
 
     app.state.thread_id = None
     app.state.workdir = None
     app.state.madgraph_handle = None
     app.state.agent = None
+    app.state.active_checkpointer = None
+    app.state.active_checkpoint_db = None
 
     app.state.messages = None
     app.state.last_msg_index = None
@@ -147,6 +159,35 @@ def create_app(
     app.state.active_cancel_event = None  # Optional[asyncio.Event]
 
     ACTIVE_EVENT_KEY = "__active__"
+
+    def resolve_checkpoint_db(thread_id: str) -> str:
+        checkpoint_db = get_run_checkpoint_db(app.state.runs_db, thread_id)
+        return checkpoint_db or app.state.legacy_checkpoints_db
+
+    def select_checkpointer(checkpoint_db: str):
+        if checkpoint_db == app.state.checkpoints_db:
+            return app.state.checkpointer
+        return app.state.legacy_checkpointer
+
+    def ensure_checkpoint_migrated(thread_id: str) -> str:
+        checkpoint_db = get_run_checkpoint_db(app.state.runs_db, thread_id)
+        if checkpoint_db:
+            return checkpoint_db
+        if app.state.checkpoints_db == app.state.legacy_checkpoints_db:
+            return app.state.checkpoints_db
+        try:
+            merge_run_checkpoints(
+                app.state.legacy_checkpoints_db,
+                app.state.checkpoints_db,
+                thread_id,
+                thread_id,
+                exclude_tables={"runs", "app_config"},
+            )
+            set_run_checkpoint_db(app.state.runs_db, thread_id, app.state.checkpoints_db)
+            return app.state.checkpoints_db
+        except Exception as exc:
+            print(f"Failed to migrate checkpoints for {thread_id}: {exc}")
+            return app.state.legacy_checkpoints_db
 
     def ensure_event_state(thread_id: str) -> None:
         if thread_id not in app.state.event_buffers:
@@ -172,7 +213,7 @@ def create_app(
         active_thread_id = app.state.active_thread_id
         active_name = None
         if active_thread_id:
-            run_info = get_run_info(app.state.checkpoint_db, active_thread_id)
+            run_info = get_run_info(app.state.runs_db, active_thread_id)
             active_name = run_info.name if run_info else None
         return {
             "event": "active_state",
@@ -189,7 +230,7 @@ def create_app(
         await append_event(ACTIVE_EVENT_KEY, payload)
 
     async def load_run(thread_id: str, new_run: bool) -> None:
-        run_info = get_run_info(app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(app.state.runs_db, thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -220,10 +261,13 @@ def create_app(
             cli_cmd="bash",
         )
 
+        checkpoint_db = ensure_checkpoint_migrated(thread_id)
+        app.state.active_checkpoint_db = checkpoint_db
+        app.state.active_checkpointer = select_checkpointer(checkpoint_db)
         app.state.agent = MadAgents(
             madgraph_handle=app.state.madgraph_handle,
             user_handle=app.state.user_handle,
-            checkpointer=app.state.checkpointer,
+            checkpointer=app.state.active_checkpointer,
             config=app.state.global_config,
         )
 
@@ -234,7 +278,7 @@ def create_app(
             app.state.messages, app.state.last_msg_index = await extract_message_history(
                 thread_id,
                 app.state.agent,
-                checkpoint_db=app.state.checkpoint_db,
+                checkpoint_db=app.state.active_checkpoint_db,
             )
         if new_run:
             try:
@@ -281,7 +325,7 @@ def create_app(
             app.state.messages, app.state.last_msg_index = await extract_message_history(
                 thread_id,
                 agent,
-                checkpoint_db=app.state.checkpoint_db,
+                checkpoint_db=app.state.active_checkpoint_db,
                 checkpoint_id=checkpoint_id,
                 include_rewindable=False,
             )
@@ -299,7 +343,7 @@ def create_app(
         pending_recipient: Optional[str] = None
 
         if new_run:
-            run_info = get_run_info(app.state.checkpoint_db, thread_id)
+            run_info = get_run_info(app.state.runs_db, thread_id)
             await append_event(
                 thread_id,
                 {
@@ -568,7 +612,7 @@ def create_app(
                     rewindable_indices: set[int] = set()
                     if any(isinstance(msg, HumanMessage) for msg in new_messages):
                         rewindable_indices = _get_rewindable_message_indices(
-                            app.state.checkpoint_db,
+                            app.state.active_checkpoint_db,
                             thread_id,
                         )
                     if new_messages:
@@ -699,7 +743,7 @@ def create_app(
         if interrupted:
             await append_event(thread_id, {"event": "interrupted"})
 
-        update_run_last_updated(app.state.checkpoint_db, thread_id)
+        update_run_last_updated(app.state.runs_db, thread_id)
         await append_event(thread_id, {"event": "done"})
 
     async def chat_worker() -> None:
@@ -745,7 +789,7 @@ def create_app(
 
     @app.get("/runs", response_model=RunsResponse)
     async def get_runs(request: Request):
-        return RunsResponse(runs=list_runs(request.app.state.checkpoint_db))
+        return RunsResponse(runs=list_runs(request.app.state.runs_db))
 
     @app.get("/runs/active", response_model=ActiveRunResponse)
     async def get_active_run(request: Request):
@@ -754,7 +798,7 @@ def create_app(
         if task is None or task.done() or not thread_id:
             return ActiveRunResponse(active_thread_id=None, active_run_name=None)
 
-        run_info = get_run_info(request.app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(request.app.state.runs_db, thread_id)
         active_name = run_info.name if run_info else None
         return ActiveRunResponse(
             active_thread_id=thread_id,
@@ -765,7 +809,7 @@ def create_app(
     async def get_config(request: Request):
         config = request.app.state.global_config
         if config is None:
-            config = load_global_config(request.app.state.checkpoint_db)
+            config = load_global_config(request.app.state.runs_db)
             request.app.state.global_config = config
         return ConfigResponse(config=config.model_dump(mode="json"))
 
@@ -777,7 +821,7 @@ def create_app(
             active_name = None
             if active_thread_id:
                 run_info = get_run_info(
-                    request.app.state.checkpoint_db,
+                    request.app.state.runs_db,
                     active_thread_id,
                 )
                 active_name = run_info.name if run_info else None
@@ -795,7 +839,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-        save_global_config(request.app.state.checkpoint_db, config)
+        save_global_config(request.app.state.runs_db, config)
         request.app.state.global_config = config
 
         if request.app.state.agent is not None:
@@ -806,7 +850,8 @@ def create_app(
             request.app.state.agent = MadAgents(
                 madgraph_handle=request.app.state.madgraph_handle,
                 user_handle=request.app.state.user_handle,
-                checkpointer=request.app.state.checkpointer,
+                checkpointer=request.app.state.active_checkpointer
+                or request.app.state.checkpointer,
                 config=config,
             )
 
@@ -814,7 +859,7 @@ def create_app(
 
     @app.get("/runs/info", response_model=RunDetails)
     async def get_run_info_endpoint(thread_id: str, request: Request):
-        run_info = get_run_info(request.app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(request.app.state.runs_db, thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
         values = await get_checkpoint_values(thread_id)
@@ -833,16 +878,27 @@ def create_app(
         name = req.name.strip() if isinstance(req.name, str) else req.name
         if name == "":
             name = None
-        set_run_name(request.app.state.checkpoint_db, req.thread_id, name)
+        set_run_name(request.app.state.runs_db, req.thread_id, name)
         if request.app.state.active_thread_id == req.thread_id:
             await emit_active_state_if_changed()
         return {"status": "ok"}
 
     @app.post("/runs/delete")
     async def delete_run(req: DeleteRunRequest, request: Request):
-        run_info = get_run_info(request.app.state.checkpoint_db, req.thread_id)
+        run_info = get_run_info(request.app.state.runs_db, req.thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
+
+        active_task = request.app.state.active_run_task
+        if (
+            active_task is not None
+            and not active_task.done()
+            and request.app.state.active_thread_id == req.thread_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="You cannot delete an active run",
+            )
 
         if request.app.state.thread_id == req.thread_id:
             if request.app.state.madgraph_handle is not None:
@@ -853,6 +909,8 @@ def create_app(
             request.app.state.workdir = None
             request.app.state.madgraph_handle = None
             request.app.state.agent = None
+            request.app.state.active_checkpointer = None
+            request.app.state.active_checkpoint_db = None
             request.app.state.messages = []
             request.app.state.last_msg_index = None
 
@@ -866,7 +924,10 @@ def create_app(
                     detail=f"Failed to delete run directory: {exc}",
                 )
 
-        delete_run_records(request.app.state.checkpoint_db, req.thread_id)
+        checkpoint_db = resolve_checkpoint_db(req.thread_id)
+        if checkpoint_db != request.app.state.runs_db:
+            delete_run_checkpoints(checkpoint_db, req.thread_id)
+        delete_run_records(request.app.state.runs_db, req.thread_id)
         request.app.state.event_buffers.pop(req.thread_id, None)
         request.app.state.event_waiters.pop(req.thread_id, None)
 
@@ -878,7 +939,7 @@ def create_app(
         request: Request,
         background_tasks: BackgroundTasks,
     ):
-        run_info = get_run_info(request.app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(request.app.state.runs_db, thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -893,10 +954,19 @@ def create_app(
 
         try:
             _create_run_subset_db(
-                request.app.state.checkpoint_db,
+                request.app.state.runs_db,
                 temp_run_db.name,
                 thread_id,
             )
+            checkpoint_db = resolve_checkpoint_db(thread_id)
+            if checkpoint_db != request.app.state.runs_db:
+                merge_run_checkpoints(
+                    checkpoint_db,
+                    temp_run_db.name,
+                    thread_id,
+                    thread_id,
+                    exclude_tables={"runs", "app_config"},
+                )
             manifest = {
                 "version": 1,
                 "thread_id": run_info.thread_id,
@@ -1028,7 +1098,7 @@ def create_app(
                 base_dir = "/runs/workdirs"
                 os.makedirs(base_dir, exist_ok=True)
                 new_thread_id, _ = _select_import_run_id(
-                    request.app.state.checkpoint_db,
+                    request.app.state.runs_db,
                     base_dir,
                     old_thread_id,
                 )
@@ -1041,12 +1111,20 @@ def create_app(
 
                 shutil.copytree(workdir_path, target_workdir)
                 try:
-                    _merge_run_db(
+                    merge_run_metadata(
                         run_db_path,
-                        request.app.state.checkpoint_db,
+                        request.app.state.runs_db,
                         old_thread_id,
                         new_thread_id,
                         new_thread_id,
+                        request.app.state.checkpoints_db,
+                    )
+                    merge_run_checkpoints(
+                        run_db_path,
+                        request.app.state.checkpoints_db,
+                        old_thread_id,
+                        new_thread_id,
+                        exclude_tables={"runs", "app_config"},
                     )
                 except Exception as exc:
                     shutil.rmtree(target_workdir, ignore_errors=True)
@@ -1088,7 +1166,7 @@ def create_app(
         if thread_id == "-1":
             return HistoryResponse(messages=[], event_cursor=0)
 
-        run_info = get_run_info(request.app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(request.app.state.runs_db, thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -1099,7 +1177,7 @@ def create_app(
             messages, last_idx = await extract_message_history(
                 thread_id,
                 app.state.agent,
-                checkpoint_db=request.app.state.checkpoint_db,
+                checkpoint_db=request.app.state.active_checkpoint_db,
             )
             app.state.messages = messages
             app.state.last_msg_index = last_idx
@@ -1162,7 +1240,7 @@ def create_app(
         if thread_id == "-1":
             raise HTTPException(status_code=404, detail="Run not found")
 
-        run_info = get_run_info(request.app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(request.app.state.runs_db, thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -1219,7 +1297,7 @@ def create_app(
             active_name = None
             if active_thread_id:
                 run_info = get_run_info(
-                    request.app.state.checkpoint_db,
+                    request.app.state.runs_db,
                     active_thread_id,
                 )
                 active_name = run_info.name if run_info else None
@@ -1232,7 +1310,7 @@ def create_app(
                 },
             )
 
-        run_info = get_run_info(request.app.state.checkpoint_db, thread_id)
+        run_info = get_run_info(request.app.state.runs_db, thread_id)
         if run_info is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
@@ -1259,7 +1337,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="Target message is not a user message")
 
         checkpoint_id = _get_checkpoint_before_message(
-            request.app.state.checkpoint_db,
+            request.app.state.active_checkpoint_db,
             thread_id,
             message_index,
         )
@@ -1269,7 +1347,7 @@ def create_app(
         app.state.messages, app.state.last_msg_index = await extract_message_history(
             thread_id,
             agent,
-            checkpoint_db=request.app.state.checkpoint_db,
+            checkpoint_db=request.app.state.active_checkpoint_db,
             checkpoint_id=checkpoint_id,
             include_rewindable=False,
         )
@@ -1306,7 +1384,7 @@ def create_app(
             active_name = None
             if active_thread_id:
                 run_info = get_run_info(
-                    request.app.state.checkpoint_db,
+                    request.app.state.runs_db,
                     active_thread_id,
                 )
                 active_name = run_info.name if run_info else None
@@ -1335,7 +1413,12 @@ def create_app(
             os.makedirs(os.path.join(workdir, "workspace"), exist_ok=True)
             os.makedirs(os.path.join(workdir, "logs"), exist_ok=True)
             workdir_rel = os.path.relpath(workdir, "/runs/workdirs")
-            add_run(request.app.state.checkpoint_db, run_id, workdir_rel)
+            add_run(
+                request.app.state.runs_db,
+                run_id,
+                workdir_rel,
+                checkpoint_db=request.app.state.checkpoints_db,
+            )
             req.thread_id = run_id
 
             new_run = True

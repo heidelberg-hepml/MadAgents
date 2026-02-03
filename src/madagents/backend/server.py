@@ -8,6 +8,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from madagents.backend.app import create_app
 from madagents.backend.compat import ensure_aiosqlite_is_alive
+from madagents.backend.constants import CHECKPOINTS_DB_PATH, RUNS_DB_PATH
 
 #########################################################################
 ## Backend server #######################################################
@@ -52,11 +53,14 @@ async def _backend_main_async(
     ensure_aiosqlite_is_alive()
     with open(log_file, "w", buffering=1) as f, redirect_stdout(f), redirect_stderr(f):
         try:
-            async with AsyncSqliteSaver.from_conn_string("/runs/runs.sqlite") as checkpointer:
+            async with AsyncSqliteSaver.from_conn_string(CHECKPOINTS_DB_PATH) as checkpointer, AsyncSqliteSaver.from_conn_string(
+                RUNS_DB_PATH
+            ) as legacy_checkpointer:
                 app = create_app(
                     user_handle=user_handle,
                     origin_port=origin_port,
                     checkpointer=checkpointer,
+                    legacy_checkpointer=legacy_checkpointer,
                 )
                 config = uvicorn.Config(app, host="127.0.0.1", port=port)
                 server = uvicorn.Server(config)
