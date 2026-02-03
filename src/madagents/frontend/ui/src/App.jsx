@@ -66,6 +66,7 @@ function App() {
   const [rewindEditIndex, setRewindEditIndex] = useState(null);
   const [rewindError, setRewindError] = useState("");
   const [isRewinding, setIsRewinding] = useState(false);
+  const [rewindStatusByThread, setRewindStatusByThread] = useState({});
   const rewindTextRef = useRef(null);
   const importInputRef = useRef(null);
   const [loadingByThreadId, setLoadingByThreadId] = useState({});
@@ -86,6 +87,10 @@ function App() {
   const canInterrupt = isLoading && currentThreadKey !== "-1";
   const blockNewMessages = Boolean(activeThreadId && activeThreadId !== currentThreadKey);
   const rewindDisabled = isLoading || blockNewMessages;
+  const currentRewindStatus =
+    selectedThreadId && selectedThreadId !== "-1"
+      ? rewindStatusByThread[selectedThreadId] || "pending"
+      : null;
 
   const scrollContainerRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -266,6 +271,23 @@ function App() {
         })) || [];
       setMessages(newMessages);
       shouldRecalcAutoScrollRef.current = true;
+    } else if (eventData.event === "rewind_status") {
+      const status = typeof eventData.status === "string" ? eventData.status : "pending";
+      setRewindStatusByThread((prev) => ({ ...prev, [threadId]: status }));
+    } else if (eventData.event === "rewind_update") {
+      const indices = new Set(eventData.rewindable_indices || []);
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (
+            m.name === "user" &&
+            typeof m.message_index === "number"
+          ) {
+            return { ...m, can_rewind_before: indices.has(m.message_index) };
+          }
+          return m;
+        })
+      );
+      setRewindStatusByThread((prev) => ({ ...prev, [threadId]: "ready" }));
     } else if (eventData.event === "error") {
       streamErrorRef.current = true;
       setError(eventData.error || "Unknown error from server");
@@ -347,6 +369,10 @@ function App() {
       }
       const data = await res.json();
       setMessages(data.messages ?? []);
+      setRewindStatusByThread((prev) => ({
+        ...prev,
+        [threadId]: data.rewind_status || "pending",
+      }));
       shouldRecalcAutoScrollRef.current = true;
       const cursor = Number(data.event_cursor);
       const storedCursor = loadStoredCursor(threadId);
@@ -886,6 +912,7 @@ function App() {
       if (selectedThreadId === "-1") {
         closeEventSource();
         setIsHistoryLoading(false);
+        fetch(`${BACKEND_URL}/history?thread_id=-1`).catch(() => {});
         return;
       }
 
@@ -934,6 +961,10 @@ function App() {
         const data = await res.json();
         if (!cancelled) {
           setMessages(data.messages ?? []);
+          setRewindStatusByThread((prev) => ({
+            ...prev,
+            [selectedThreadId]: data.rewind_status || "pending",
+          }));
           shouldRecalcAutoScrollRef.current = true;
         }
         const cursor = Number(data.event_cursor);
@@ -1610,6 +1641,7 @@ function App() {
             scrollContainerRef={scrollContainerRef}
             isHistoryLoading={isHistoryLoading}
             selectedThreadId={selectedThreadId}
+            rewindStatus={currentRewindStatus}
             rewindEditIndex={rewindEditIndex}
             rewindError={rewindError}
             isRewinding={isRewinding}

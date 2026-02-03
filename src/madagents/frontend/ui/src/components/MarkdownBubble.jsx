@@ -21,6 +21,8 @@ export default function MarkdownBubble({
   showRewind = false,
   onRewind = null,
   rewindDisabled = false,
+  rewindLoading = false,
+  rewindTooltip = "Rewind",
 }) {
   const isDark = theme === darkTheme;
   const remarkPlugins = isUser
@@ -77,6 +79,8 @@ export default function MarkdownBubble({
           isUser={isUser}
           onClick={onRewind}
           disabled={rewindDisabled}
+          loading={rewindLoading}
+          tooltip={rewindTooltip}
         />
       )}
       {showCopyButton && (

@@ -157,6 +157,10 @@ def create_app(
     app.state.active_run_task = None  # Optional[asyncio.Task]
     app.state.active_thread_id = None  # Optional[str]
     app.state.active_cancel_event = None  # Optional[asyncio.Event]
+    app.state.rewind_tasks = {}  # dict[str, asyncio.Task]
+    app.state.rewind_status = {}  # dict[str, str]
+    app.state.rewind_cache = {}  # dict[str, set[int]]
+    app.state.viewed_thread_id = None  # Optional[str]
 
     ACTIVE_EVENT_KEY = "__active__"
 
@@ -208,6 +212,91 @@ def create_app(
         async with condition:
             condition.notify_all()
         return event_id
+
+    def _get_rewind_status(thread_id: str) -> Optional[str]:
+        return app.state.rewind_status.get(thread_id)
+
+    async def _set_rewind_status(thread_id: str, status: str, detail: Optional[str] = None) -> None:
+        app.state.rewind_status[thread_id] = status
+        payload = {"event": "rewind_status", "status": status}
+        if detail:
+            payload["detail"] = detail
+        await append_event(thread_id, payload)
+
+    async def _run_rewind_scan(thread_id: str) -> None:
+        try:
+            checkpoint_db = resolve_checkpoint_db(thread_id)
+            indices = await asyncio.to_thread(
+                _get_rewindable_message_indices,
+                checkpoint_db,
+                thread_id,
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            await _set_rewind_status(thread_id, "error", str(exc))
+            return
+
+        if asyncio.current_task() and asyncio.current_task().cancelled():
+            return
+
+        app.state.rewind_cache[thread_id] = indices
+        await append_event(
+            thread_id,
+            {
+                "event": "rewind_update",
+                "rewindable_indices": sorted(indices),
+            },
+        )
+        await _set_rewind_status(thread_id, "ready")
+
+    async def _start_rewind_scan(thread_id: str, force: bool = False) -> None:
+        task = app.state.rewind_tasks.get(thread_id)
+        if task is not None and not task.done():
+            return
+        if not force:
+            cached = app.state.rewind_cache.get(thread_id)
+            status = _get_rewind_status(thread_id)
+            if cached and status == "ready":
+                return
+        await _set_rewind_status(thread_id, "pending")
+        scan_task = asyncio.create_task(_run_rewind_scan(thread_id))
+        app.state.rewind_tasks[thread_id] = scan_task
+
+        def _cleanup(_task: asyncio.Task) -> None:
+            current = app.state.rewind_tasks.get(thread_id)
+            if current is _task:
+                app.state.rewind_tasks.pop(thread_id, None)
+
+        scan_task.add_done_callback(_cleanup)
+
+    async def _refresh_rewind_scans() -> None:
+        desired: set[str] = set()
+        if app.state.active_thread_id:
+            desired.add(app.state.active_thread_id)
+        if app.state.viewed_thread_id:
+            desired.add(app.state.viewed_thread_id)
+
+        for thread_id, task in list(app.state.rewind_tasks.items()):
+            if thread_id not in desired:
+                task.cancel()
+                app.state.rewind_tasks.pop(thread_id, None)
+
+        for thread_id in desired:
+            status = _get_rewind_status(thread_id)
+            await _start_rewind_scan(thread_id, force=status == "error")
+
+    def _apply_rewind_indices(messages: list[dict], indices: Optional[set[int]]) -> list[dict]:
+        if not indices:
+            return messages
+        indexed = set(indices)
+        updated = []
+        for msg in messages:
+            if msg.get("name") == "user" and isinstance(msg.get("message_index"), int):
+                updated.append({**msg, "can_rewind_before": msg["message_index"] in indexed})
+            else:
+                updated.append(msg)
+        return updated
 
     def build_active_state_payload() -> dict:
         active_thread_id = app.state.active_thread_id
@@ -275,11 +364,17 @@ def create_app(
         app.state.last_msg_index = 0
 
         if not new_run:
+            cached_indices = app.state.rewind_cache.get(thread_id)
+            include_rewindable = bool(cached_indices)
             app.state.messages, app.state.last_msg_index = await extract_message_history(
                 thread_id,
                 app.state.agent,
                 checkpoint_db=app.state.active_checkpoint_db,
+                include_rewindable=include_rewindable,
+                rewindable_indices=cached_indices,
             )
+            if not cached_indices:
+                await _start_rewind_scan(thread_id)
         if new_run:
             try:
                 with open("/logs/agent.png", "wb") as f:
@@ -611,10 +706,13 @@ def create_app(
                     start_index = app.state.last_msg_index or 0
                     rewindable_indices: set[int] = set()
                     if any(isinstance(msg, HumanMessage) for msg in new_messages):
-                        rewindable_indices = _get_rewindable_message_indices(
-                            app.state.active_checkpoint_db,
-                            thread_id,
-                        )
+                        cached = app.state.rewind_cache.get(thread_id)
+                        if cached:
+                            rewindable_indices = cached
+                            if _get_rewind_status(thread_id) == "ready":
+                                await _start_rewind_scan(thread_id, force=True)
+                        else:
+                            await _start_rewind_scan(thread_id)
                     if new_messages:
                         _update_pending_tool_calls(
                             new_messages,
@@ -756,6 +854,7 @@ def create_app(
             cancel_event = asyncio.Event()
             app.state.active_thread_id = thread_id
             app.state.active_cancel_event = cancel_event
+            await _refresh_rewind_scans()
             await emit_active_state_if_changed()
             app.state.active_run_task = asyncio.create_task(
                 run_chat_message(
@@ -784,6 +883,7 @@ def create_app(
                 app.state.active_run_task = None
                 app.state.active_thread_id = None
                 app.state.active_cancel_event = None
+                await _refresh_rewind_scans()
                 await emit_active_state_if_changed()
                 app.state.chat_queue.task_done()
 
@@ -930,6 +1030,11 @@ def create_app(
         delete_run_records(request.app.state.runs_db, req.thread_id)
         request.app.state.event_buffers.pop(req.thread_id, None)
         request.app.state.event_waiters.pop(req.thread_id, None)
+        rewind_task = request.app.state.rewind_tasks.pop(req.thread_id, None)
+        if rewind_task is not None:
+            rewind_task.cancel()
+        request.app.state.rewind_cache.pop(req.thread_id, None)
+        request.app.state.rewind_status.pop(req.thread_id, None)
 
         return {"status": "ok"}
 
@@ -1164,6 +1269,8 @@ def create_app(
         force_refresh: bool = False,
     ):
         if thread_id == "-1":
+            app.state.viewed_thread_id = None
+            await _refresh_rewind_scans()
             return HistoryResponse(messages=[], event_cursor=0)
 
         run_info = get_run_info(request.app.state.runs_db, thread_id)
@@ -1173,20 +1280,37 @@ def create_app(
         if app.state.agent is None or app.state.thread_id != thread_id:
             await load_run(thread_id, new_run=False)
 
+        app.state.viewed_thread_id = thread_id
+        await _refresh_rewind_scans()
+
         if force_refresh:
+            cached_indices = app.state.rewind_cache.get(thread_id)
+            include_rewindable = bool(cached_indices)
             messages, last_idx = await extract_message_history(
                 thread_id,
                 app.state.agent,
                 checkpoint_db=request.app.state.active_checkpoint_db,
+                include_rewindable=include_rewindable,
+                rewindable_indices=cached_indices,
             )
             app.state.messages = messages
             app.state.last_msg_index = last_idx
         else:
             messages = request.app.state.messages
 
+        cached_indices = app.state.rewind_cache.get(thread_id)
+        if cached_indices:
+            messages = _apply_rewind_indices(messages or [], cached_indices)
+            app.state.messages = messages
+
+        rewind_status = _get_rewind_status(thread_id)
+        if rewind_status is None:
+            rewind_status = "ready" if cached_indices else "pending"
+
         return HistoryResponse(
             messages=[HistoryMessage(**msg) for msg in messages],
             event_cursor=get_event_cursor(thread_id),
+            rewind_status=rewind_status,
         )
 
     @app.get("/events/active")

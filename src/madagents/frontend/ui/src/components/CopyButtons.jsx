@@ -167,7 +167,14 @@ export function MessageCopyButton({ text, theme, isUser }) {
 /**
  * Button for rewinding a user message.
  */
-export function MessageRewindButton({ theme, isUser, onClick, disabled = false }) {
+export function MessageRewindButton({
+  theme,
+  isUser,
+  onClick,
+  disabled = false,
+  loading = false,
+  tooltip = "Rewind",
+}) {
   const isDark = theme === darkTheme;
   const buttonBg = isUser
     ? "rgba(0,0,0,0.35)"
@@ -180,14 +187,15 @@ export function MessageRewindButton({ theme, isUser, onClick, disabled = false }
       ? "rgba(255,255,255,0.18)"
       : "rgba(17,24,39,0.15)";
   const buttonColor = isUser ? "#f9fafb" : theme.text;
+  const isDisabled = disabled || loading;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
-      title="Edit & rewind"
-      aria-label="Edit & rewind"
+      disabled={isDisabled}
+      title={tooltip}
+      aria-label={tooltip}
       style={{
         position: "absolute",
         top: "0.35rem",
@@ -198,11 +206,43 @@ export function MessageRewindButton({ theme, isUser, onClick, disabled = false }
         fontSize: "0.7rem",
         padding: "0.15rem 0.4rem",
         borderRadius: "0.35rem",
-        cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.5 : 0.95,
+        cursor: isDisabled ? "default" : "pointer",
+        opacity: isDisabled ? 0.5 : 0.95,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.25rem",
       }}
     >
       Rewind
+      {loading && (
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 50 50"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <circle
+            cx="25"
+            cy="25"
+            r="20"
+            fill="none"
+            stroke={buttonColor}
+            strokeWidth="5"
+            strokeLinecap="round"
+            strokeDasharray="31.4 31.4"
+          >
+            <animateTransform
+              attributeName="transform"
+              type="rotate"
+              from="0 25 25"
+              to="360 25 25"
+              dur="0.8s"
+              repeatCount="indefinite"
+            />
+          </circle>
+        </svg>
+      )}
     </button>
   );
 }

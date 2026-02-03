@@ -85,6 +85,7 @@ class HistoryMessage(BaseModel):
 class HistoryResponse(BaseModel):
     messages: list[HistoryMessage]
     event_cursor: Optional[int] = None
+    rewind_status: Optional[str] = None
 
 
 class ChatResponse(BaseModel):

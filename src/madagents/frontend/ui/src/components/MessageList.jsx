@@ -21,6 +21,7 @@ const MessageList = memo(function MessageList({
   scrollContainerRef,
   isHistoryLoading,
   selectedThreadId,
+  rewindStatus,
   rewindEditIndex,
   rewindError,
   isRewinding,
@@ -114,7 +115,23 @@ const MessageList = memo(function MessageList({
           const showOrchestratorEffort =
             isOrchestrator && !isOrchestratorToUser && Boolean(orchestratorEffort);
           const shouldAccordionWrap = !isUser && !isOrchestrator;
-          const canRewind = isUser && Boolean(m.can_rewind_before);
+          const effectiveRewindStatus = rewindStatus || "pending";
+          const isRewindLoading = effectiveRewindStatus === "pending";
+          const isRewindReady = effectiveRewindStatus === "ready";
+          const isRewindError = effectiveRewindStatus === "error";
+          const canRewind = isUser && isRewindReady && Boolean(m.can_rewind_before);
+          const showRewindButton =
+            isUser &&
+            typeof m.message_index === "number" &&
+            (isRewindLoading || isRewindReady || isRewindError);
+          let rewindTooltip = "Rewind from this message isn't available.";
+          if (isRewindLoading) {
+            rewindTooltip = "Checking rewind compatibility…";
+          } else if (canRewind) {
+            rewindTooltip = "Rewind the conversation from this message.";
+          } else if (isRewindError) {
+            rewindTooltip = "Rewind compatibility is unavailable.";
+          }
           const isEditingRewind =
             isUser &&
             typeof m.message_index === "number" &&
@@ -321,8 +338,10 @@ const MessageList = memo(function MessageList({
                         theme={theme}
                         showCopy={showMessageCopy}
                         copyText={contentText}
-                        showRewind={canRewind}
-                        rewindDisabled={rewindDisabled}
+                        showRewind={showRewindButton}
+                        rewindDisabled={rewindDisabled || !canRewind}
+                        rewindLoading={isRewindLoading}
+                        rewindTooltip={rewindTooltip}
                         onRewind={() => onStartRewind(m)}
                       >
                         {contentText}

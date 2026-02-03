@@ -105,6 +105,7 @@ async def extract_message_history(
     checkpoint_db: Optional[str] = None,
     checkpoint_id: Optional[str] = None,
     include_rewindable: bool = True,
+    rewindable_indices: Optional[set[int]] = None,
 ) -> tuple[list[dict], int]:
     """Build UI message history from checkpoint state."""
     config = {"configurable": {"thread_id": thread_id}}
@@ -121,9 +122,12 @@ async def extract_message_history(
     agents_messages = values.get("agents_messages", {})
 
     history: list[dict] = []
-    rewindable_indices: set[int] = set()
-    if include_rewindable and checkpoint_db and checkpoint_id is None:
-        rewindable_indices = _get_rewindable_message_indices(checkpoint_db, thread_id)
+    rewindable_indices_set: set[int] = set()
+    if include_rewindable and checkpoint_id is None:
+        if rewindable_indices is not None:
+            rewindable_indices_set = set(rewindable_indices)
+        elif checkpoint_db:
+            rewindable_indices_set = _get_rewindable_message_indices(checkpoint_db, thread_id)
 
     for idx, msg in enumerate(messages):
         agent_name = getattr(msg, "name", None)
@@ -147,8 +151,8 @@ async def extract_message_history(
             "add_content": get_add_content(msg),
             "message_index": idx,
         }
-        if isinstance(msg, HumanMessage) and rewindable_indices:
-            payload["can_rewind_before"] = idx in rewindable_indices
+        if isinstance(msg, HumanMessage) and rewindable_indices_set:
+            payload["can_rewind_before"] = idx in rewindable_indices_set
         history.append(payload)
 
     return history, len(messages)
