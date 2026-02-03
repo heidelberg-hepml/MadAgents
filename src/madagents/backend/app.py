@@ -449,14 +449,19 @@ def create_app(
 
         human_message = HumanMessage(content=message)
         state = {"messages": [human_message]}
-        app.state.messages.append(
-            {
-                "content": message,
-                "name": "user",
-                "add_content": get_add_content(human_message),
-            }
+        user_message_index = app.state.last_msg_index or 0
+        user_ui_message = {
+            "content": message,
+            "name": "user",
+            "add_content": get_add_content(human_message),
+            "message_index": user_message_index,
+        }
+        app.state.messages.append(user_ui_message)
+        app.state.last_msg_index = user_message_index + 1
+        await append_event(
+            thread_id,
+            {"event": "message_update", "messages": [user_ui_message]},
         )
-        app.state.last_msg_index = app.state.last_msg_index + 1
 
         async def apply_interrupt_updates() -> None:
             if interrupt_reason is None:
@@ -1283,7 +1288,11 @@ def create_app(
         app.state.viewed_thread_id = thread_id
         await _refresh_rewind_scans()
 
-        if force_refresh:
+        use_live_history = (
+            app.state.active_thread_id == thread_id
+            and app.state.messages is not None
+        )
+        if force_refresh and not use_live_history:
             cached_indices = app.state.rewind_cache.get(thread_id)
             include_rewindable = bool(cached_indices)
             messages, last_idx = await extract_message_history(
@@ -1297,6 +1306,18 @@ def create_app(
             app.state.last_msg_index = last_idx
         else:
             messages = request.app.state.messages
+            if messages is None:
+                cached_indices = app.state.rewind_cache.get(thread_id)
+                include_rewindable = bool(cached_indices)
+                messages, last_idx = await extract_message_history(
+                    thread_id,
+                    app.state.agent,
+                    checkpoint_db=request.app.state.active_checkpoint_db,
+                    include_rewindable=include_rewindable,
+                    rewindable_indices=cached_indices,
+                )
+                app.state.messages = messages
+                app.state.last_msg_index = last_idx
 
         cached_indices = app.state.rewind_cache.get(thread_id)
         if cached_indices:

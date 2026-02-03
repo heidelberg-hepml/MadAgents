@@ -259,7 +259,29 @@ function App() {
           can_rewind_before: m.can_rewind_before,
         })) || [];
 
-      setMessages((prev) => [...prev, ...newMessages]);
+      setMessages((prev) => {
+        if (newMessages.length === 0) return prev;
+        const next = [...prev];
+        newMessages.forEach((incoming) => {
+          if (
+            incoming.name === "user" &&
+            typeof incoming.message_index === "number"
+          ) {
+            const matchIndex = next.findIndex(
+              (existing) =>
+                existing.name === "user" &&
+                typeof existing.message_index !== "number" &&
+                existing.content === incoming.content
+            );
+            if (matchIndex >= 0) {
+              next[matchIndex] = { ...next[matchIndex], ...incoming };
+              return;
+            }
+          }
+          next.push(incoming);
+        });
+        return next;
+      });
     } else if (eventData.event === "history_reset") {
       const newMessages =
         (eventData.messages ?? []).map((m) => ({
@@ -359,9 +381,12 @@ function App() {
     closeEventSource();
     setIsHistoryLoading(true);
     skipHistoryRef.current = false;
+    const useForceRefresh = !(activeThreadId && activeThreadId === threadId);
     try {
       const res = await fetch(
-        `${BACKEND_URL}/history?thread_id=${encodeURIComponent(threadId)}&force_refresh=1`
+        `${BACKEND_URL}/history?thread_id=${encodeURIComponent(
+          threadId
+        )}&force_refresh=${useForceRefresh ? 1 : 0}`
       );
       if (!res.ok) {
         await reportResponseError(res, "Failed to load history");
@@ -926,11 +951,12 @@ function App() {
       }
 
       setIsHistoryLoading(true);
+      const useForceRefresh = !isActiveHere;
       try {
         const res = await fetch(
           `${BACKEND_URL}/history?thread_id=${encodeURIComponent(
             selectedThreadId
-          )}&force_refresh=1`
+          )}&force_refresh=${useForceRefresh ? 1 : 0}`
         );
         if (!res.ok) {
           if (res.status === 404) {
@@ -989,7 +1015,7 @@ function App() {
       cancelled = true;
       closeEventSource();
     };
-  }, [selectedThreadId]);
+  }, [selectedThreadId, isActiveHere]);
 
   // Track whether user is near the bottom
   useEffect(() => {
