@@ -103,7 +103,7 @@ class AgentConfig(BaseModel):
 
 class MadAgentsConfig(BaseModel):
     workflow_step_limit: int = Field(default=1000)
-    require_madgraph_evidence: bool = Field(default=True)
+    require_madgraph_evidence: bool = Field(default=False)
     agents: Dict[str, AgentConfig] = Field(default_factory=dict)
 
     @field_validator("workflow_step_limit")
