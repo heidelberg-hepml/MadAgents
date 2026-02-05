@@ -25,6 +25,8 @@ const configHelpText = {
     "Minimum token budget reserved for recent messages before summarizing older content.",
   summarizer_settings:
     "The summarizer first keeps the last N messages verbatim. If a response includes multiple tool calls, it still counts as one message. Then it keeps additional recent messages until it reaches the “Keep recent tokens” budget. Everything older than that is summarized.",
+  require_madgraph_evidence:
+    "Require evidence-backed explanations for MadGraph and related tools. This can significantly improve response quality, but may increase invocation time and cost.",
 };
 
 /**
@@ -44,6 +46,7 @@ export default function SettingsModal({
   setWorkerGroup,
   applyWorkerGroup,
   updateWorkflowStepLimit,
+  updateGlobalField,
   updateAgentField,
   parsePositiveInt,
   saveConfig,
@@ -233,6 +236,46 @@ export default function SettingsModal({
                       color: theme.text,
                     }}
                   />
+                </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "170px 1fr",
+                    gap: "0.65rem",
+                    alignItems: "center",
+                    fontSize: "0.9rem",
+                    marginTop: "0.7rem",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", opacity: 0.75 }}>
+                    <span>Require evidence for MadGraph explanations</span>
+                    {renderHelpButton(
+                      "require_madgraph_evidence",
+                      "MadGraph evidence requirement",
+                      "require_madgraph_evidence",
+                      { minWidth: "320px", maxWidth: "420px" }
+                    )}
+                  </div>
+                  <label
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.5rem",
+                      cursor: "pointer",
+                      width: "fit-content",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(configDraft.require_madgraph_evidence)}
+                      onChange={(e) =>
+                        updateGlobalField("require_madgraph_evidence", e.target.checked)
+                      }
+                    />
+                    <span style={{ fontSize: "0.88rem", opacity: 0.85 }}>
+                      Enabled
+                    </span>
+                  </label>
                 </div>
               </div>
 

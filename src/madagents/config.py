@@ -103,6 +103,7 @@ class AgentConfig(BaseModel):
 
 class MadAgentsConfig(BaseModel):
     workflow_step_limit: int = Field(default=1000)
+    require_madgraph_evidence: bool = Field(default=True)
     agents: Dict[str, AgentConfig] = Field(default_factory=dict)
 
     @field_validator("workflow_step_limit")
@@ -179,6 +180,8 @@ def coerce_config(payload: Optional[dict]) -> MadAgentsConfig:
 
     if "workflow_step_limit" in payload:
         data["workflow_step_limit"] = payload.get("workflow_step_limit")
+    if "require_madgraph_evidence" in payload:
+        data["require_madgraph_evidence"] = bool(payload.get("require_madgraph_evidence"))
 
     agents_payload = payload.get("agents")
     if isinstance(agents_payload, dict):

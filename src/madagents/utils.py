@@ -31,6 +31,22 @@ def invoke_with_validation_retry(llm, messages, *, reasoning=None, max_retries: 
                 raise
     raise last_exc
 
+def inject_optional_prompt_lines(prompt: str, marker: str, lines: str) -> str:
+    """Replace a marker line with optional content without leaving blank lines."""
+    replacement = lines.strip()
+    out_lines: list[str] = []
+    inserted = False
+    for line in prompt.splitlines():
+        if line.strip() == marker:
+            if replacement:
+                out_lines.extend(replacement.splitlines())
+            inserted = True
+            continue
+        out_lines.append(line.replace(marker, replacement))
+    if not inserted:
+        return prompt.replace(marker, replacement)
+    return "\n".join(out_lines)
+
 def float_env(name: str, default: float) -> float:
     """Parse a float from the environment, gracefully falling back to default."""
     value = os.environ.get(name)

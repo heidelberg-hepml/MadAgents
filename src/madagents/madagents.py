@@ -467,7 +467,8 @@ class MadAgents:
         self.orchestrator = Orchestrator(
             model=orchestrator_cfg.model,
             reasoning_effort=ORCHESTRATOR_REASONING_EFFORT,
-            verbosity=orchestrator_cfg.verbosity
+            verbosity=orchestrator_cfg.verbosity,
+            require_madgraph_evidence=config.require_madgraph_evidence,
         )
         
         self.planner = Planner(
@@ -507,7 +508,8 @@ class MadAgents:
             reasoning_effort=DEFAULT_REASONING_EFFORT,
             verbosity=reviewer_cfg.verbosity,
             step_limit=reviewer_cfg.step_limit,
-            summarizer=self.summarizer
+            summarizer=self.summarizer,
+            require_madgraph_evidence=config.require_madgraph_evidence,
         )
 
         worker_model = planner_cfg.model

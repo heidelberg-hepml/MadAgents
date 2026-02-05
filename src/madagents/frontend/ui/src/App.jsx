@@ -515,6 +515,16 @@ function App() {
     });
   };
 
+  const updateGlobalField = (field, value) => {
+    setConfigDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        [field]: value,
+      };
+    });
+  };
+
   const updateAgentField = (agentName, field, value) => {
     setConfigDraft((prev) => {
       if (!prev || !prev.agents || !prev.agents[agentName]) return prev;
@@ -1814,6 +1824,7 @@ function App() {
         setWorkerGroup={setWorkerGroup}
         applyWorkerGroup={applyWorkerGroup}
         updateWorkflowStepLimit={updateWorkflowStepLimit}
+        updateGlobalField={updateGlobalField}
         updateAgentField={updateAgentField}
         parsePositiveInt={parsePositiveInt}
         saveConfig={saveConfig}

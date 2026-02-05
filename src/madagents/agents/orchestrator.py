@@ -18,7 +18,7 @@ from madagents.agents.workers.researcher import RESEARCHER_DESC
 from madagents.agents.workers.plotter import PLOTTER_DESC
 from madagents.agents.planner import PLANNER_DESC, PLAN_UPDATER_DESC
 from madagents.agents.reviewer import REVIEWER_DESC
-from madagents.utils import invoke_with_validation_retry
+from madagents.utils import invoke_with_validation_retry, inject_optional_prompt_lines
 
 #########################################################################
 ## Orchestrator decision ################################################
@@ -79,8 +79,10 @@ ORCHESTRATOR_SYSTEM_PROMPT = """You are an AI assistant who manages the workflow
 - Before destructive or irreversible actions (delete/overwrite, uninstall, change system configs) outside the directory `/workspace`, ask for explicit confirmation and summarize the impact.
   Exception: if the user has explicitly requested the exact destructive action and scope (what/where), you may proceed without an extra confirmation, but still state what you are about to do first.
 - Do not fabricate the results of agents. Do not simulate the execution of agents.
+__MADGRAPH_EVIDENCE_SYSTEM_LINES__
 - If you are missing critical information or critical facts, explain what is missing and what is needed instead of guessing, unless they fall under the "allowed assumptions".
 - If essential details are unclear, missing, or ambiguous, ask the user instead of guessing, unless they fall under the "allowed assumptions".
+  Exception: If the missing details might be obtained from the user's CLI, inspect it first; only ask the user if CLI inspection is inconclusive.
 - If a specific choice/decision is needed (e.g. a specific configuration), decide whether it can be easily changed later on:
   - If so, let the specialized agents make the choice/decision unless you have to make it first.
   - Otherwise, ask the user for the specific choice/decision.
@@ -261,10 +263,6 @@ Whenever you are invoked, follow the steps:
 3. Send a message to the recipient.
 
 <workflow_guidelines>
-- Decide whether it is possible that the user refers to their interactive CLI session, especially if the user request appears to be underspecified or is missing vital context (e.g. "What went wrong?", "Please help me?", "How can I proceed?", "Please review my work.").
-  If this is the case (even if it seems unlikely), ALWAYS inspect the user's CLI state via the user_cli_operator.
-  Based on that outcome, decide whether you want to assume that the user refers to their CLI session. If you do this, clearly state this assumption to the user.
-
 - If the user goal requires interacting with the environment (e.g., installing software, reading local data, or writing outputs), first ensure you have an overview of the task-relevant environment details (paths, permissions, and existing files). Obtain this information via suitable workers as needed.
 - If a task requires storing data (e.g. intermediate results, final deliverables), decide beforehand where it should be placed.
 
@@ -297,7 +295,11 @@ Whenever you are invoked, follow the steps:
   - can instruct the planner to change the plan or create a completely new one. In this case, let the reviewer judge the changed or new plan.
   - can instruct the plan_updater to output the current state of the plan.
 
-- Before reporting results (even if the user goal is only partially satisfied) or deliverables to the user (whether or not you created a plan for this goal), ALWAYS review the outcome with the reviewer. In particular, check whether it satisfies the user goal (e.g. Was part of the user goal missed? Are all requested user-facing deliverables created and saved in the correct folders?).
+- Before reporting
+  (a) results (even if the user goal is only partially satisfied),
+  (b) deliverables, or
+  (c) explanations about MadGraph or related tools
+  to the user (whether or not you created a plan for this goal), ALWAYS review the outcome with the reviewer. In particular, check whether it satisfies the user goal (e.g. Was part of the user goal missed? Are all requested user-facing deliverables created and saved in the correct folders?).
   In particular, ALWAYS review generated plots in detail. If a worker claims the plots were reviewed during the plot-creation task, still double-check them.
 - If a plan is completely finished, ALL steps must be marked with either `skipped`, `done`, `failed` or `blocked` before you present the final results to the user.
   After all plan steps have been updated accordingly and before you report back the final results, invoke the reviewer and ask it to judge whether the user's ultimate goal has been achieved.
@@ -339,6 +341,10 @@ If the reviewer did not assess one or more user-facing deliverables, re-invoke t
   - Decide whether the outcome of some previous steps are needed for the revised plan.
   - If so, prefer including those successful steps in the new plan.
   - This gives the user an overview of the end-to-end workflow of the complex task.
+- Inspect the user's CLI whenever
+  (a) the request is underspecified and CLI context can fill in missing details (e.g. "What went wrong?", "Please help me?", "How can I proceed?", "Please review my work."), or
+  (b) the user refers, directly or indirectly, to terminal output.
+  Default to inspecting the CLI rather than requesting pasted content; only ask the user for additional commands/outputs when inspection is inconclusive.
 - If a step is expected to take a lot of time, warn the user and if possible, propose a preliminary, simplified step to the user.
 </routing_guidelines>
 
@@ -364,26 +370,45 @@ Unless the user specifies persistence behavior, follow these guidelines:
 - When asking for details/choices/..., include 1-2 proposals if reasonable.
 </style>"""
 
+ORCHESTRATOR_SYSTEM_MADGRAPH_EVIDENCE_PROMPT = """- Never base your answers on your general knowledge of MadGraph or related tools; worker agents must present supporting evidance.
+- MadGraph evidence requirement: When discussing MadGraph or related software, do not state a factual claim unless it is supported by verifiable evidence.
+  Acceptable evidence includes (non-exhaustive):
+  (a) an excerpt from official/trustworthy documentation,
+  (b) a local software invocation (exact command + exact output), or
+  (c) a relevant excerpt from the software source code (file path + snippet).
+  Evidence must directly support the specific claim. Do not rely on common sense or generic/loosely related references.
+  If you cannot obtain evidence, label the statement as UNVERIFIED and present it as a hypothesis, along with a concrete step to verify it (e.g., a command to run, a file/function to inspect, or a doc section to check).
+  It is crucial that you NEVER present false claims to the user."""
+
 #########################################################################
 ## Nodes ################################################################
 #########################################################################
 
-def get_orchestrator_node(llm: BaseChatModel) -> Callable[[OrchestratorState], dict]:
+def get_orchestrator_node(
+    llm: BaseChatModel,
+    require_madgraph_evidence: bool = False,
+) -> Callable[[OrchestratorState], dict]:
     """Create a state-graph node that runs the orchestrator LLM."""
     def orchestrator_node(state: OrchestratorState) -> dict:
         """Assemble prompts, invoke the LLM, and return graph updates."""
+        _system_prompt = inject_optional_prompt_lines(
+            ORCHESTRATOR_SYSTEM_PROMPT,
+            "__MADGRAPH_EVIDENCE_SYSTEM_LINES__",
+            ORCHESTRATOR_SYSTEM_MADGRAPH_EVIDENCE_PROMPT if require_madgraph_evidence else "",
+        )
         _developer_prompt = ORCHESTRATOR_DEVELOPER_PROMPT
+        
         prev_msgs_summary = state.get("prev_msg_summary", None)
         if prev_msgs_summary is not None and prev_msgs_summary.strip() != "":
             # Inject prior summary to keep the prompt compact.
-            _developer_prompt = f"""{ORCHESTRATOR_DEVELOPER_PROMPT}
+            _developer_prompt = f"""{_developer_prompt}
 
 <previous_conversation_summary>
 {prev_msgs_summary}
 </previous_conversation_summary>"""
 
         messages = [
-            SystemMessage(content=ORCHESTRATOR_SYSTEM_PROMPT),
+            SystemMessage(content=_system_prompt),
             SystemMessage(
                 content=_developer_prompt,
                 additional_kwargs={"__openai_role__": "developer"},
@@ -417,7 +442,8 @@ class Orchestrator:
         self,
         model: str="gpt-5.1",
         reasoning_effort: str="high",
-        verbosity: str="low"
+        verbosity: str="low",
+        require_madgraph_evidence: bool = False,
     ):
         """Initialize the orchestrator model and compile its graph."""
         self.llm = ChatOpenAI(
@@ -437,7 +463,13 @@ class Orchestrator:
 
         graph = StateGraph(OrchestratorState)
 
-        graph.add_node("agent", get_orchestrator_node(self.orchestrator_llm))
+        graph.add_node(
+            "agent",
+            get_orchestrator_node(
+                self.orchestrator_llm,
+                require_madgraph_evidence=require_madgraph_evidence,
+            ),
+        )
 
         graph.set_entry_point("agent")
         graph.add_edge("agent", END)

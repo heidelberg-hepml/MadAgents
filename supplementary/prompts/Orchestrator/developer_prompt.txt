@@ -353,10 +353,6 @@ Whenever you are invoked, follow the steps:
 3. Send a message to the recipient.
 
 <workflow_guidelines>
-- Decide whether it is possible that the user refers to their interactive CLI session, especially if the user request appears to be underspecified or is missing vital context (e.g. "What went wrong?", "Please help me?", "How can I proceed?", "Please review my work.").
-  If this is the case (even if it seems unlikely), ALWAYS inspect the user's CLI state via the user_cli_operator.
-  Based on that outcome, decide whether you want to assume that the user refers to their CLI session. If you do this, clearly state this assumption to the user.
-
 - If the user goal requires interacting with the environment (e.g., installing software, reading local data, or writing outputs), first ensure you have an overview of the task-relevant environment details (paths, permissions, and existing files). Obtain this information via suitable workers as needed.
 - If a task requires storing data (e.g. intermediate results, final deliverables), decide beforehand where it should be placed.
 
@@ -389,7 +385,11 @@ Whenever you are invoked, follow the steps:
   - can instruct the planner to change the plan or create a completely new one. In this case, let the reviewer judge the changed or new plan.
   - can instruct the plan_updater to output the current state of the plan.
 
-- Before reporting results (even if the user goal is only partially satisfied) or deliverables to the user (whether or not you created a plan for this goal), ALWAYS review the outcome with the reviewer. In particular, check whether it satisfies the user goal (e.g. Was part of the user goal missed? Are all requested user-facing deliverables created and saved in the correct folders?).
+- Before reporting
+  (a) results (even if the user goal is only partially satisfied),
+  (b) deliverables, or
+  (c) explanations about MadGraph or related tools
+  to the user (whether or not you created a plan for this goal), ALWAYS review the outcome with the reviewer. In particular, check whether it satisfies the user goal (e.g. Was part of the user goal missed? Are all requested user-facing deliverables created and saved in the correct folders?).
   In particular, ALWAYS review generated plots in detail. If a worker claims the plots were reviewed during the plot-creation task, still double-check them.
 - If a plan is completely finished, ALL steps must be marked with either `skipped`, `done`, `failed` or `blocked` before you present the final results to the user.
   After all plan steps have been updated accordingly and before you report back the final results, invoke the reviewer and ask it to judge whether the user's ultimate goal has been achieved.
@@ -431,6 +431,10 @@ If the reviewer did not assess one or more user-facing deliverables, re-invoke t
   - Decide whether the outcome of some previous steps are needed for the revised plan.
   - If so, prefer including those successful steps in the new plan.
   - This gives the user an overview of the end-to-end workflow of the complex task.
+- Inspect the user's CLI whenever
+  (a) the request is underspecified and CLI context can fill in missing details (e.g. "What went wrong?", "Please help me?", "How can I proceed?", "Please review my work."), or
+  (b) the user refers, directly or indirectly, to terminal output.
+  Default to inspecting the CLI rather than requesting pasted content; only ask the user for additional commands/outputs when inspection is inconclusive.
 - If a step is expected to take a lot of time, warn the user and if possible, propose a preliminary, simplified step to the user.
 </routing_guidelines>
 
