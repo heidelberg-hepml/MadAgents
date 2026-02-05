@@ -199,6 +199,58 @@ export default function SettingsModal({
                   padding: "0.9rem",
                   borderRadius: "0.85rem",
                   border: `1px solid ${theme.border}`,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.7rem",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.4rem",
+                    fontSize: "0.95rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  <span>Evidence Requirements</span>
+                  {renderHelpButton(
+                    "require_madgraph_evidence",
+                    "MadGraph and related tools evidence requirement",
+                    "require_madgraph_evidence",
+                    { minWidth: "320px", maxWidth: "420px" }
+                  )}
+                </div>
+                <div style={{ fontSize: "0.85rem", opacity: 0.78 }}>
+                  Require evidence for explanations about MadGraph and related tools.
+                </div>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.55rem",
+                    cursor: "pointer",
+                    width: "fit-content",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={Boolean(configDraft.require_madgraph_evidence)}
+                    onChange={(e) =>
+                      updateGlobalField("require_madgraph_evidence", e.target.checked)
+                    }
+                  />
+                  <span style={{ fontSize: "0.9rem", fontWeight: 500 }}>
+                    Enable Evidence Requirement
+                  </span>
+                </label>
+              </div>
+
+              <div
+                style={{
+                  padding: "0.9rem",
+                  borderRadius: "0.85rem",
+                  border: `1px solid ${theme.border}`,
                 }}
               >
                 <div
@@ -236,46 +288,6 @@ export default function SettingsModal({
                       color: theme.text,
                     }}
                   />
-                </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "170px 1fr",
-                    gap: "0.65rem",
-                    alignItems: "center",
-                    fontSize: "0.9rem",
-                    marginTop: "0.7rem",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", opacity: 0.75 }}>
-                    <span>Require evidence for MadGraph explanations</span>
-                    {renderHelpButton(
-                      "require_madgraph_evidence",
-                      "MadGraph evidence requirement",
-                      "require_madgraph_evidence",
-                      { minWidth: "320px", maxWidth: "420px" }
-                    )}
-                  </div>
-                  <label
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "0.5rem",
-                      cursor: "pointer",
-                      width: "fit-content",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={Boolean(configDraft.require_madgraph_evidence)}
-                      onChange={(e) =>
-                        updateGlobalField("require_madgraph_evidence", e.target.checked)
-                      }
-                    />
-                    <span style={{ fontSize: "0.88rem", opacity: 0.85 }}>
-                      Enabled
-                    </span>
-                  </label>
                 </div>
               </div>
 
