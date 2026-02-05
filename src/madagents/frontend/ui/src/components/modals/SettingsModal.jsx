@@ -200,20 +200,24 @@ export default function SettingsModal({
                   borderRadius: "0.85rem",
                   border: `1px solid ${theme.border}`,
                   display: "flex",
-                  flexDirection: "column",
-                  gap: "0.7rem",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "0.8rem",
                 }}
               >
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "0.4rem",
-                    fontSize: "0.95rem",
-                    fontWeight: 600,
+                    gap: "0.35rem",
+                    fontSize: "0.9rem",
+                    fontWeight: 500,
+                    minWidth: 0,
                   }}
                 >
-                  <span>Evidence Requirements</span>
+                  <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    Require evidence for explanations about MadGraph and related tools
+                  </span>
                   {renderHelpButton(
                     "require_madgraph_evidence",
                     "MadGraph and related tools evidence requirement",
@@ -221,16 +225,14 @@ export default function SettingsModal({
                     { minWidth: "320px", maxWidth: "420px" }
                   )}
                 </div>
-                <div style={{ fontSize: "0.85rem", opacity: 0.78 }}>
-                  Require evidence for explanations about MadGraph and related tools.
-                </div>
                 <label
                   style={{
-                    display: "flex",
+                    display: "inline-flex",
                     alignItems: "center",
-                    gap: "0.55rem",
+                    gap: "0.5rem",
                     cursor: "pointer",
                     width: "fit-content",
+                    flexShrink: 0,
                   }}
                 >
                   <input
@@ -239,9 +241,40 @@ export default function SettingsModal({
                     onChange={(e) =>
                       updateGlobalField("require_madgraph_evidence", e.target.checked)
                     }
+                    style={{ display: "none" }}
                   />
-                  <span style={{ fontSize: "0.9rem", fontWeight: 500 }}>
-                    Enable Evidence Requirement
+                  <span
+                    style={{
+                      width: "42px",
+                      height: "24px",
+                      borderRadius: "999px",
+                      border: `1px solid ${theme.border}`,
+                      background: configDraft.require_madgraph_evidence
+                        ? "rgba(37, 99, 235, 0.95)"
+                        : theme.inputBg,
+                      position: "relative",
+                      transition: "background 0.15s ease",
+                      boxShadow: configDraft.require_madgraph_evidence
+                        ? "0 0 0 2px rgba(37, 99, 235, 0.18)"
+                        : "none",
+                    }}
+                  >
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: "2px",
+                        left: configDraft.require_madgraph_evidence ? "20px" : "2px",
+                        width: "18px",
+                        height: "18px",
+                        borderRadius: "999px",
+                        background: "#fff",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                        transition: "left 0.15s ease",
+                      }}
+                    />
+                  </span>
+                  <span style={{ fontSize: "0.85rem", opacity: 0.8 }}>
+                    {configDraft.require_madgraph_evidence ? "On" : "Off"}
                   </span>
                 </label>
               </div>
