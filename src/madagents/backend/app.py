@@ -150,6 +150,8 @@ def create_app(
 
     app.state.messages = None
     app.state.last_msg_index = None
+    app.state.message_buffers = {}  # dict[str, list[dict]]
+    app.state.message_indices = {}  # dict[str, int]
     app.state.event_buffers = {}  # dict[str, list[dict]]
     app.state.event_waiters = {}  # dict[str, asyncio.Condition]
     app.state.chat_queue = asyncio.Queue()  # asyncio.Queue
@@ -212,6 +214,35 @@ def create_app(
         async with condition:
             condition.notify_all()
         return event_id
+
+    def _sync_loaded_thread_cache(thread_id: str) -> None:
+        if app.state.thread_id != thread_id:
+            return
+        app.state.messages = app.state.message_buffers.get(thread_id)
+        app.state.last_msg_index = app.state.message_indices.get(thread_id)
+
+    def _store_thread_history(thread_id: str, messages: list[dict], last_msg_index: int) -> None:
+        app.state.message_buffers[thread_id] = messages
+        app.state.message_indices[thread_id] = last_msg_index
+        _sync_loaded_thread_cache(thread_id)
+
+    def _append_thread_ui_messages(thread_id: str, messages: list[dict]) -> None:
+        if not messages:
+            return
+        existing = app.state.message_buffers.get(thread_id)
+        if existing is None:
+            existing = []
+            app.state.message_buffers[thread_id] = existing
+        existing.extend(messages)
+        _sync_loaded_thread_cache(thread_id)
+
+    def _get_thread_message_index(thread_id: str) -> int:
+        idx = app.state.message_indices.get(thread_id)
+        return idx if isinstance(idx, int) and idx >= 0 else 0
+
+    def _set_thread_message_index(thread_id: str, idx: int) -> None:
+        app.state.message_indices[thread_id] = idx
+        _sync_loaded_thread_cache(thread_id)
 
     def _get_rewind_status(thread_id: str) -> Optional[str]:
         return app.state.rewind_status.get(thread_id)
@@ -360,21 +391,30 @@ def create_app(
             config=app.state.global_config,
         )
 
-        app.state.messages = []
-        app.state.last_msg_index = 0
+        keep_live_cache = (
+            not new_run
+            and app.state.active_thread_id == thread_id
+            and thread_id in app.state.message_buffers
+            and thread_id in app.state.message_indices
+        )
 
-        if not new_run:
+        if keep_live_cache:
+            _sync_loaded_thread_cache(thread_id)
+        elif not new_run:
             cached_indices = app.state.rewind_cache.get(thread_id)
             include_rewindable = bool(cached_indices)
-            app.state.messages, app.state.last_msg_index = await extract_message_history(
+            messages, last_idx = await extract_message_history(
                 thread_id,
                 app.state.agent,
                 checkpoint_db=app.state.active_checkpoint_db,
                 include_rewindable=include_rewindable,
                 rewindable_indices=cached_indices,
             )
+            _store_thread_history(thread_id, messages, last_idx)
             if not cached_indices:
                 await _start_rewind_scan(thread_id)
+        else:
+            _store_thread_history(thread_id, [], 0)
         if new_run:
             try:
                 with open("/logs/agent.png", "wb") as f:
@@ -417,13 +457,18 @@ def create_app(
                     "checkpoint_id": checkpoint_id,
                 }
             }
-            app.state.messages, app.state.last_msg_index = await extract_message_history(
+            history_messages, history_last_idx = await extract_message_history(
                 thread_id,
                 agent,
                 checkpoint_db=app.state.active_checkpoint_db,
                 checkpoint_id=checkpoint_id,
                 include_rewindable=False,
             )
+            _store_thread_history(thread_id, history_messages, history_last_idx)
+        elif thread_id not in app.state.message_buffers:
+            _store_thread_history(thread_id, [], 0)
+
+        thread_last_msg_index = _get_thread_message_index(thread_id)
         interrupted = False
         interrupt_reason: Optional[tuple[str, Optional[str]]] = None
         current_namespace: tuple = ()
@@ -449,21 +494,23 @@ def create_app(
 
         human_message = HumanMessage(content=message)
         state = {"messages": [human_message]}
-        user_message_index = app.state.last_msg_index or 0
+        user_message_index = thread_last_msg_index
         user_ui_message = {
             "content": message,
             "name": "user",
             "add_content": get_add_content(human_message),
             "message_index": user_message_index,
         }
-        app.state.messages.append(user_ui_message)
-        app.state.last_msg_index = user_message_index + 1
+        _append_thread_ui_messages(thread_id, [user_ui_message])
+        thread_last_msg_index = user_message_index + 1
+        _set_thread_message_index(thread_id, thread_last_msg_index)
         await append_event(
             thread_id,
             {"event": "message_update", "messages": [user_ui_message]},
         )
 
         async def apply_interrupt_updates() -> None:
+            nonlocal thread_last_msg_index
             if interrupt_reason is None:
                 return
 
@@ -677,19 +724,17 @@ def create_app(
 
             await _update_graph_state(agent.graph, config, update)
 
-            if app.state.messages is not None:
-                ui_messages: list[dict] = []
-                if synthetic_ui_messages:
-                    ui_messages.extend(synthetic_ui_messages)
-                ui_messages.extend(_message_to_ui(msg) for msg in interrupt_messages)
-                app.state.messages += ui_messages
-                if app.state.last_msg_index is None:
-                    app.state.last_msg_index = 0
-                app.state.last_msg_index += len(update.get("messages", []))
-                await append_event(
-                    thread_id,
-                    {"event": "message_update", "messages": ui_messages},
-                )
+            ui_messages: list[dict] = []
+            if synthetic_ui_messages:
+                ui_messages.extend(synthetic_ui_messages)
+            ui_messages.extend(_message_to_ui(msg) for msg in interrupt_messages)
+            _append_thread_ui_messages(thread_id, ui_messages)
+            thread_last_msg_index += len(update.get("messages", []))
+            _set_thread_message_index(thread_id, thread_last_msg_index)
+            await append_event(
+                thread_id,
+                {"event": "message_update", "messages": ui_messages},
+            )
 
         async_gen = None
         try:
@@ -707,8 +752,8 @@ def create_app(
 
                 if namespace == ():
                     messages = update["messages"]
-                    new_messages = messages[app.state.last_msg_index:]
-                    start_index = app.state.last_msg_index or 0
+                    new_messages = messages[thread_last_msg_index:]
+                    start_index = thread_last_msg_index
                     rewindable_indices: set[int] = set()
                     if any(isinstance(msg, HumanMessage) for msg in new_messages):
                         cached = app.state.rewind_cache.get(thread_id)
@@ -753,8 +798,9 @@ def create_app(
                         }
                         for i, msg in enumerate(new_messages)
                     ]
-                    app.state.messages += new_messages
-                    app.state.last_msg_index = len(messages)
+                    _append_thread_ui_messages(thread_id, new_messages)
+                    thread_last_msg_index = len(messages)
+                    _set_thread_message_index(thread_id, thread_last_msg_index)
 
                     payload = {
                         "event": "message_update",
@@ -797,7 +843,7 @@ def create_app(
                         for msg in new_messages
                         for exec_trace in get_exec_trace_messages(namespace[0], msg)
                     ]
-                    app.state.messages += new_messages
+                    _append_thread_ui_messages(thread_id, new_messages)
                     subgraph_last_msg_index = len(messages)
                     payload = {
                         "event": "message_update",
@@ -1016,7 +1062,7 @@ def create_app(
             request.app.state.agent = None
             request.app.state.active_checkpointer = None
             request.app.state.active_checkpoint_db = None
-            request.app.state.messages = []
+            request.app.state.messages = None
             request.app.state.last_msg_index = None
 
         workdir_path = os.path.join("/runs/workdirs", run_info.workdir)
@@ -1040,6 +1086,8 @@ def create_app(
             rewind_task.cancel()
         request.app.state.rewind_cache.pop(req.thread_id, None)
         request.app.state.rewind_status.pop(req.thread_id, None)
+        request.app.state.message_buffers.pop(req.thread_id, None)
+        request.app.state.message_indices.pop(req.thread_id, None)
 
         return {"status": "ok"}
 
@@ -1290,7 +1338,7 @@ def create_app(
 
         use_live_history = (
             app.state.active_thread_id == thread_id
-            and app.state.messages is not None
+            and thread_id in app.state.message_buffers
         )
         if force_refresh and not use_live_history:
             cached_indices = app.state.rewind_cache.get(thread_id)
@@ -1302,10 +1350,9 @@ def create_app(
                 include_rewindable=include_rewindable,
                 rewindable_indices=cached_indices,
             )
-            app.state.messages = messages
-            app.state.last_msg_index = last_idx
+            _store_thread_history(thread_id, messages, last_idx)
         else:
-            messages = request.app.state.messages
+            messages = request.app.state.message_buffers.get(thread_id)
             if messages is None:
                 cached_indices = app.state.rewind_cache.get(thread_id)
                 include_rewindable = bool(cached_indices)
@@ -1316,13 +1363,12 @@ def create_app(
                     include_rewindable=include_rewindable,
                     rewindable_indices=cached_indices,
                 )
-                app.state.messages = messages
-                app.state.last_msg_index = last_idx
+                _store_thread_history(thread_id, messages, last_idx)
 
         cached_indices = app.state.rewind_cache.get(thread_id)
         if cached_indices:
             messages = _apply_rewind_indices(messages or [], cached_indices)
-            app.state.messages = messages
+            _store_thread_history(thread_id, messages, _get_thread_message_index(thread_id))
 
         rewind_status = _get_rewind_status(thread_id)
         if rewind_status is None:
@@ -1489,20 +1535,21 @@ def create_app(
         if checkpoint_id is None:
             raise HTTPException(status_code=409, detail="No checkpoint before that message")
 
-        app.state.messages, app.state.last_msg_index = await extract_message_history(
+        history_messages, history_last_idx = await extract_message_history(
             thread_id,
             agent,
             checkpoint_db=request.app.state.active_checkpoint_db,
             checkpoint_id=checkpoint_id,
             include_rewindable=False,
         )
+        _store_thread_history(thread_id, history_messages, history_last_idx)
 
         ensure_event_state(thread_id)
         await append_event(
             thread_id,
             {
                 "event": "history_reset",
-                "messages": app.state.messages,
+                "messages": history_messages,
             },
         )
         if app.state.chat_worker_task is None or app.state.chat_worker_task.done():
