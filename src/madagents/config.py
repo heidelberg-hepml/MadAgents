@@ -10,6 +10,7 @@ SUPPORTED_MODELS: List[str] = [
     "gpt-5",
     "gpt-5.1",
     "gpt-5.2",
+    "glm-5:cloud",
 ]
 
 VERBOSITY_LEVELS: List[str] = ["low", "medium", "high"]
@@ -38,7 +39,7 @@ AGENT_ORDER: List[str] = [
 
 
 class AgentConfig(BaseModel):
-    model: str = Field(default="gpt-5.1")
+    model: str = Field(default="glm-5:cloud")
     verbosity: str = Field(default="low")
     reasoning_effort: Optional[str] = Field(default=None)
     token_threshold: Optional[int] = Field(default=None)
@@ -121,7 +122,7 @@ def _default_agents() -> Dict[str, AgentConfig]:
         "orchestrator": AgentConfig(step_limit=None, supports_step_limit=False),
         "planner": AgentConfig(step_limit=None, supports_step_limit=False),
         "plan_updater": AgentConfig(
-            model="gpt-5-mini",
+            model="glm-5:cloud",
             verbosity="low",
             step_limit=None,
             supports_step_limit=False,

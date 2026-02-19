@@ -195,22 +195,17 @@ def get_plan_updater_node(plan_updater_llm: BaseChatModel) -> Callable[[MadAgent
         structured_plan_updater = plan_updater_llm.with_structured_output(
             PlanUpdate,
             include_raw=True,
-            reasoning={"effort": reasoning_effort}
         )
 
         messages = [
             SystemMessage(content=PLAN_UPDATER_SYSTEM_PROMPT),
-            SystemMessage(
-                content=get_plan_updater_developer_prompt(state["plan"]),
-                additional_kwargs={"__openai_role__": "developer"},
-            ),
+            SystemMessage(content=get_plan_updater_developer_prompt(state["plan"])),
             HumanMessage(content=orchestrator_decision["message"])
         ]
 
         plan_update_response = invoke_with_validation_retry(
             structured_plan_updater,
             messages,
-            reasoning={"effort": reasoning_effort},
         )
         plan_update_raw: AIMessage = plan_update_response["raw"]
         plan_update_raw.name = "plan_updater"
@@ -479,13 +474,8 @@ class MadAgents:
         plan_updater_cfg = config.agents["plan_updater"]
         self.plan_updater_llm = ChatOpenAI(
             model=plan_updater_cfg.model,
-            base_url=None,
-            api_key=os.environ["LLM_API_KEY"],
-            use_responses_api=True,
-            reasoning={
-                "effort": "low",
-            },
-            verbosity=plan_updater_cfg.verbosity,
+            base_url='http://localhost:11434/v1',
+            api_key='ollama',
             max_tokens=50_000
         )
         summarizer_cfg = config.agents["summarizer"]

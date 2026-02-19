@@ -409,10 +409,7 @@ def get_orchestrator_node(
 
         messages = [
             SystemMessage(content=_system_prompt),
-            SystemMessage(
-                content=_developer_prompt,
-                additional_kwargs={"__openai_role__": "developer"},
-            ),
+            SystemMessage(content=_developer_prompt),
             *state["prev_msgs"],
             *state["messages"],
         ]
@@ -440,7 +437,7 @@ class Orchestrator:
     """Wrap an orchestrator LLM and expose a minimal state graph."""
     def __init__(
         self,
-        model: str="gpt-5.1",
+        model: str="glm-5:cloud",
         reasoning_effort: str="high",
         verbosity: str="low",
         require_madgraph_evidence: bool = False,
@@ -448,18 +445,13 @@ class Orchestrator:
         """Initialize the orchestrator model and compile its graph."""
         self.llm = ChatOpenAI(
             model=model,
-            base_url=None,
-            api_key=os.environ["LLM_API_KEY"],
-            use_responses_api=True,
-            reasoning={
-                "effort": reasoning_effort,
-            },
-            verbosity=verbosity,
+            base_url='http://localhost:11434/v1',
+            api_key='ollama',
             max_tokens=1_000_000
         )
 
         # Structured output ensures the response matches OrchestratorDecision.
-        self.orchestrator_llm = self.llm.with_structured_output(OrchestratorDecision, include_raw=True).bind(include=["reasoning.encrypted_content"])
+        self.orchestrator_llm = self.llm.with_structured_output(OrchestratorDecision, include_raw=True)
 
         graph = StateGraph(OrchestratorState)
 

@@ -46,8 +46,7 @@ def get_worker_node(
     """Create a state-graph node that runs a worker LLM."""
     def worker_node(state: BaseWorkerState) -> dict:
         """Assemble prompts, invoke the worker, and return graph updates."""
-        reasoning_effort = state.get("reasoning_effort", "high")
-        _llm = llm.bind(reasoning={"effort": reasoning_effort})
+        _llm = llm
 
         prev_msgs_summary = state.get("prev_msg_summary", None)
         non_summary_start = state.get("non_summary_start", 0) or 0
@@ -83,13 +82,10 @@ def get_worker_node(
 
         messages = [
             SystemMessage(content=system_prompt),
-            SystemMessage(
-                content=_developer_prompt,
-                additional_kwargs={"__openai_role__": "developer"},
-            ),
+            SystemMessage(content=_developer_prompt),
             *context_msgs,
         ]
-        response = _llm.invoke(messages, reasoning={"effort": reasoning_effort})
+        response = _llm.invoke(messages)
         response.name = name
         # Persist token counts for downstream accounting.
         annotate_output_token_counts(response, include_reasoning=True, include_total=True)
@@ -114,7 +110,7 @@ class BaseWorker:
         developer_prompt: str,
         tools: list,
         state_class: type[BaseWorkerState] = BaseWorkerState,
-        model: str="gpt-5.1",
+        model: str="glm-5:cloud",
         reasoning_effort: str="high",
         verbosity: str="low",
         step_limit: Optional[int] = 200,
@@ -132,21 +128,15 @@ class BaseWorker:
 
         self.llm = ChatOpenAI(
             model=model,
-            base_url=None,
-            api_key=os.environ["LLM_API_KEY"],
-            use_responses_api=True,
-            reasoning={
-                "effort": reasoning_effort,
-            },
-            verbosity=verbosity,
+            base_url='http://localhost:11434/v1',
+            api_key='ollama',
             max_tokens=1_000_000
         )
 
         _tools_for_node = [tool for tool in self.tools if not isinstance(tool, dict)]
 
-        bind_kwargs = {"include": ["reasoning.encrypted_content"]}
-        # Bind tools to the LLM, including encrypted reasoning when available.
-        self.llm_with_tools = self.llm.bind_tools(self.tools).bind(**bind_kwargs)
+        # Bind tools to the LLM.
+        self.llm_with_tools = self.llm.bind_tools(self.tools)
         
         graph = StateGraph(self.state_class)
 

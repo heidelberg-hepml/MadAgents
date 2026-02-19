@@ -56,7 +56,7 @@ class Summarizer:
     """Summarize conversation history to stay within token limits."""
     def __init__(
         self,
-        model: str="gpt-5.1",
+        model: str="glm-5:cloud",
         reasoning_effort: str="low",
         verbosity: str="low",
         max_tokens: int = 1_000_000,
@@ -70,13 +70,8 @@ class Summarizer:
         self.min_tail_tokens = min_tail_tokens
         self.llm = ChatOpenAI(
             model=model,
-            base_url=None,
-            api_key=os.environ["LLM_API_KEY"],
-            use_responses_api=True,
-            reasoning={
-                "effort": reasoning_effort,
-            },
-            verbosity=verbosity,
+            base_url='http://localhost:11434/v1',
+            api_key='ollama',
             max_tokens=max_tokens
         )
 
@@ -93,10 +88,7 @@ class Summarizer:
 
         messages = [
             SystemMessage(content=SUMMARIZER_SYSTEM_PROMPT),
-            SystemMessage(
-                content=_developer_prompt,
-                additional_kwargs={"__openai_role__": "developer"},
-            ),
+            SystemMessage(content=_developer_prompt),
             *messages
         ]
 

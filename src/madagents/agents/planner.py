@@ -473,16 +473,10 @@ def get_planner_node(llm: BaseChatModel, tools: list) -> Callable[[PlannerState]
     """Create a state-graph node that runs the planner LLM."""
     def planner_node(state: PlannerState) -> dict:
         """Assemble prompts, invoke the planner, and return graph updates."""
-        reasoning_effort = state.get("reasoning_effort", "high")
-        
         # Structured output enforces the Plan schema.
         _llm = llm.with_structured_output(
             Plan,
-            strict=True,
             include_raw=True,
-            tools=tools,
-            include=["reasoning.encrypted_content"],
-            reasoning={"effort": reasoning_effort}
         )
 
         _developer_prompt = PLANNER_DEVELOPER_PROMPT
@@ -497,17 +491,13 @@ def get_planner_node(llm: BaseChatModel, tools: list) -> Callable[[PlannerState]
 
         messages = [
             SystemMessage(content=PLANNER_SYSTEM_PROMPT),
-            SystemMessage(
-                content=_developer_prompt,
-                additional_kwargs={"__openai_role__": "developer"},
-            ),
+            SystemMessage(content=_developer_prompt),
             *state["prev_msgs"],
             *state["messages"],
         ]
         response = invoke_with_validation_retry(
             _llm,
             messages,
-            reasoning={"effort": reasoning_effort},
         )
         
         response_raw: AIMessage = response["raw"]
@@ -533,20 +523,15 @@ class Planner:
     """Planner agent that produces a structured multi-step plan."""
     def __init__(
         self,
-        model: str="gpt-5.1",
+        model: str="glm-5:cloud",
         reasoning_effort: str="high",
         verbosity: str="low"
     ):
         """Initialize planner LLM and compile its state graph."""
         self.llm = ChatOpenAI(
             model=model,
-            base_url=None,
-            api_key=os.environ["LLM_API_KEY"],
-            use_responses_api=True,
-            reasoning={
-                "effort": reasoning_effort,
-            },
-            verbosity=verbosity,
+            base_url='http://localhost:11434/v1',
+            api_key='ollama',
             max_tokens=1_000_000
         )
 
